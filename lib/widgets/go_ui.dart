@@ -29,16 +29,17 @@ class GoBackdrop extends StatelessWidget {
       );
 }
 
+// 背景光晕只保留极淡的品牌色调，避免大块高饱和色压在正文后面产生眩光。
 const _glowPurple = RadialGradient(
   center: Alignment(-0.7, -0.9),
   radius: 1.35,
-  colors: [Color(0xAA7C4DFF), Color(0x00000000)],
+  colors: [Color(0x246B5AC6), Color(0x00000000)],
   stops: [0, 0.65],
 );
 const _glowCyan = RadialGradient(
   center: Alignment(0.95, 1.1),
   radius: 1.4,
-  colors: [Color(0x7341E0D0), Color(0x00000000)],
+  colors: [Color(0x142FAFA4), Color(0x00000000)],
   stops: [0, 0.7],
 );
 
@@ -607,7 +608,7 @@ class GoProgress extends StatelessWidget {
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(colors: [Go.primary, Go.secondary]),
                   borderRadius: BorderRadius.circular(Go.rFull),
-                  boxShadow: const [BoxShadow(color: Color(0x4D41E0D0), blurRadius: 8, offset: Offset(0, 0))],
+                  boxShadow: const [BoxShadow(color: Color(0x264FC6B8), blurRadius: 8, offset: Offset(0, 0))],
                 ),
               ),
             ),

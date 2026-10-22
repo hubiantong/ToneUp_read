@@ -38,6 +38,8 @@ dependencies:
   sqflite: ^2.4.4
   http: ^1.6.0
   flutter_tts: ^4.2.0
+  # Edge「大声朗读」的免费神经音色（纯 Dart，依赖 crypto + flutter，体积增量极小）。
+  edge_tts: ^0.1.5
   crypto: ^3.0.7
   shared_preferences: ^2.5.5
   path_provider: ^2.1.6

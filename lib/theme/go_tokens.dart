@@ -7,61 +7,61 @@ class Go {
   /// rpx → dp。
   static double r(num rpx) => rpx * 0.5;
 
-  // ================= 主色系（霓虹紫 Berry 盘 · 深色玻璃） =================
-  static const primary = Color(0xFF8B5CF6); // 霓虹紫（白字可读）
-  static const primary95 = Color(0xFF241A3A); // 选中态深紫底
-  static const primary90 = Color(0xFF2E2350);
-  static const primary80 = Color(0xFF3D2E66);
-  static const primary60 = Color(0xFF6D4FC0);
+  // ================= 主色系（低饱和紫 · 深色中性底） =================
+  static const primary = Color(0xFF8B5CF6); // 品牌紫（仅小面积点缀）
+  static const primary95 = Color(0xFF2A2338); // 选中态深紫底（压暗降饱和）
+  static const primary90 = Color(0xFF322A44);
+  static const primary80 = Color(0xFF3E3552);
+  static const primary60 = Color(0xFF7565B8);
   static const primary40 = Color(0xFF8B5CF6);
-  static const primary20 = Color(0xFF4A2E84);
+  static const primary20 = Color(0xFF463A63);
   static const onPrimary = Color(0xFFFFFFFF);
-  static const onPrimaryVariant = Color(0xFF2D0A45);
-  static const onPrimaryContainer = Color(0xFFE9DEFF);
+  static const onPrimaryVariant = Color(0xFF241A38);
+  static const onPrimaryContainer = Color(0xFFE2DBF2);
 
-  static const secondary = Color(0xFF41E0D0); // 青（渐变副色）
-  static const onSecondary = Color(0xFF06231F);
-  static const secondaryContainer = Color(0xFF163B39);
-  static const onSecondaryContainer = Color(0xFFAEF2EA);
+  static const secondary = Color(0xFF4FC6B8); // 柔和青（渐变副色）
+  static const onSecondary = Color(0xFF08241F);
+  static const secondaryContainer = Color(0xFF1B3532);
+  static const onSecondaryContainer = Color(0xFFB7E6DF);
 
-  static const tertiary = Color(0xFFE072B0); // 粉
-  static const onTertiary = Color(0xFF2A0A1B);
-  static const tertiaryContainer = Color(0xFF3A1730);
-  static const onTertiaryContainer = Color(0xFFF6D6E9);
+  static const tertiary = Color(0xFFD48AAE); // 柔和粉
+  static const onTertiary = Color(0xFF2A111C);
+  static const tertiaryContainer = Color(0xFF38222C);
+  static const onTertiaryContainer = Color(0xFFEFD3E1);
 
-  // ================= 中性 / 表面（深色） =================
-  static const bg = Color(0xFF0E0A1A); // 近黑紫底
-  static const surface = Color(0xFF171327); // 卡片 / 面板
-  static const surface1 = Color(0xFF1E1931);
-  static const surface2 = Color(0xFF261F3D);
-  static const surfaceVariant = Color(0xFF2E2647); // 进度轨道（暗但可见）
-  static const surfaceRaised = Color(0xFF1B1530);
-  static const onSurface = Color(0xFFECE9F5);
-  static const onSurface2 = Color(0xFFB7AFCB);
-  static const onSurface3 = Color(0xFF8A82A0);
-  static const onSurfaceDisabled = Color(0xFF5C5675);
-  static const outline = Color(0xFF3A3352);
-  static const outlineStrong = Color(0xFF524A6E);
-  static const onBg = Color(0xFFECE9F5);
+  // ================= 中性 / 表面（墨色中性，只留极弱紫调） =================
+  static const bg = Color(0xFF14131A); // 墨黑底：低饱和，久读不刺眼
+  static const surface = Color(0xFF1B1A22); // 卡片 / 面板
+  static const surface1 = Color(0xFF201F28);
+  static const surface2 = Color(0xFF27262F);
+  static const surfaceVariant = Color(0xFF302F39); // 进度轨道（暗但可见）
+  static const surfaceRaised = Color(0xFF1C1B23);
+  static const onSurface = Color(0xFFDCDAE3); // 正文：降低对比，减少炫光
+  static const onSurface2 = Color(0xFFA8A5B2);
+  static const onSurface3 = Color(0xFF817E8C);
+  static const onSurfaceDisabled = Color(0xFF5B5866);
+  static const outline = Color(0xFF34323D);
+  static const outlineStrong = Color(0xFF4B4956);
+  static const onBg = Color(0xFFDCDAE3);
 
   // ================= 语义色 =================
-  static const success = Color(0xFF4CC38A);
+  static const success = Color(0xFF5FBF95);
   static const onSuccess = Color(0xFF06231A);
-  static const warning = Color(0xFFE0B341);
+  static const warning = Color(0xFFD9AE5F);
   static const onWarning = Color(0xFF2A1F00);
-  static const danger = Color(0xFFE072B0);
+  static const danger = Color(0xFFD98AA8);
   static const onDanger = Color(0xFF2A0A1B);
-  static const error = Color(0xFFE072B0);
-  static const info = Color(0xFF41E0D0);
+  static const error = Color(0xFFD98AA8);
+  static const info = Color(0xFF4FC6B8);
 
   // ================= 选中态 / 强调 =================
-  static const sel = Color(0x2E8B5CF6); // rgba(139,92,246,.18)
-  static const selStrong = Color(0x4D8B5CF6); // .30
-  static const selWord = Color(0x4DE072B0); // .30
+  static const sel = Color(0x268B5CF6); // rgba(139,92,246,.15)
+  static const selStrong = Color(0x408B5CF6); // .25
+  static const selWord = Color(0x33E072B0); // .20
 
-  static const glassBg = Color(0xBF1A1430);
-  static const glassBgStrong = Color(0xE61E1838);
-  static const glassBorder = Color(0x40FFFFFF);
+  static const glassBg = Color(0xB81A1922);
+  static const glassBgStrong = Color(0xE61E1D26);
+  static const glassBorder = Color(0x33FFFFFF);
   static const glassRadius = 10.0;
 
   static const List<BoxShadow> elev1 = [
@@ -80,18 +80,18 @@ class Go {
     BoxShadow(color: Color(0x99000000), offset: Offset(0, -2), blurRadius: 12),
   ];
   static const List<BoxShadow> glassShadow = [
-    BoxShadow(color: Color(0x4D6D4FC0), offset: Offset(0, 6), blurRadius: 18),
+    BoxShadow(color: Color(0x339080E0), offset: Offset(0, 6), blurRadius: 18),
     BoxShadow(color: Color(0x40000000), offset: Offset(0, 2), blurRadius: 6),
   ];
   static const List<BoxShadow> glowPrimary = [
-    BoxShadow(color: Color(0x3D8B5CF6), blurRadius: 14, offset: Offset(0, 3)),
+    BoxShadow(color: Color(0x268B5CF6), blurRadius: 14, offset: Offset(0, 3)),
   ];
   static const List<BoxShadow> glowSecondary = [
-    BoxShadow(color: Color(0x3341E0D0), blurRadius: 10, offset: Offset(0, 2)),
+    BoxShadow(color: Color(0x264FC6B8), blurRadius: 10, offset: Offset(0, 2)),
   ];
 
   static const scrim = Color(0x99000000);
-  static const overlay = Color(0xD11E1838);
+  static const overlay = Color(0xD11E1D26);
 
   // ================= 字体 =================
   static const fontRead = 'Songti SC'; // 阅读正文衬线（回退到系统衬线）

@@ -588,9 +588,9 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp2),
                   padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp3),
-                  decoration: BoxDecoration(color: Go.onSurface.withValues(alpha: 0.88), borderRadius: BorderRadius.circular(Go.rMd)),
+                  decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
                   child: const Text('点选多个单词组成选区，点「查询」出词卡 · 点「翻译」看译文 · 再次点词取消选中',
-                      textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsMeta, color: Go.bg, height: Go.lhSnug)),
+                      textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface2, height: Go.lhSnug)),
                 ),
               if (_showSettings) _settings(cfg),
               Expanded(child: _body()),
@@ -806,18 +806,21 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       margin: const EdgeInsets.only(bottom: Go.sp5),
       child: GestureDetector(
         onLongPress: () => _onParaLongPress(pi),
-        child: _ParaText(
-          pi: pi,
-          toks: toks,
-          starts: starts,
-          sel: _sel,
-          selVer: _selVer,
-          flashTok: _flashPara == pi ? _flashTok : -1,
-          onTok: (ti, isLong) {
-            final tk = ti < toks.length ? toks[ti] : const _Tok('', false);
-            _onTok(tk, isLong, text, pi, ti);
-          },
-          onEmptyLongPress: () => _onParaLongPress(pi),
+        child: LayoutBuilder(
+          builder: (context, c) => _ParaText(
+            pi: pi,
+            toks: toks,
+            starts: starts,
+            maxWidth: c.maxWidth,
+            sel: _sel,
+            selVer: _selVer,
+            flashTok: _flashPara == pi ? _flashTok : -1,
+            onTok: (ti, isLong) {
+              final tk = ti < toks.length ? toks[ti] : const _Tok('', false);
+              _onTok(tk, isLong, text, pi, ti);
+            },
+            onEmptyLongPress: () => _onParaLongPress(pi),
+          ),
         ),
       ),
     );
@@ -992,7 +995,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       bottom: MediaQuery.of(context).padding.bottom + Go.sp4,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp3),
-        decoration: BoxDecoration(color: const Color(0xFF2D2A35), borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.shadow3),
+        decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.shadow3),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1081,6 +1084,7 @@ class _ParaText extends StatefulWidget {
   final int pi;
   final List<_Tok> toks;
   final List<int> starts;
+  final double maxWidth;
   final Set<int> sel;
   final ValueNotifier<int> selVer;
   final int flashTok;
@@ -1091,6 +1095,7 @@ class _ParaText extends StatefulWidget {
     required this.pi,
     required this.toks,
     required this.starts,
+    required this.maxWidth,
     required this.sel,
     required this.selVer,
     required this.flashTok,
@@ -1107,6 +1112,8 @@ class _ParaTextState extends State<_ParaText> {
   Set<int> _mine = const {};
   late final TapGestureRecognizer _tap;
   static const _indent = TextSpan(text: '\u2003\u2003');
+  /// 单词宽度缓存：key 含字号/字体/系统缩放，避免选中态变化时整段重复排版。
+  final Map<String, double> _wCache = <String, double>{};
 
   @override
   void initState() {
@@ -1200,15 +1207,52 @@ class _ParaTextState extends State<_ParaText> {
   InlineSpan _span(_Tok tk, int ti) {
     final selected = _mine.contains(ti);
     final flash = widget.flashTok == ti;
-    final style = (selected || flash)
+    final selStyle = (selected || flash)
         ? TextStyle(
             backgroundColor: Go.selWord,
             fontWeight: selected ? FontWeight.w600 : null,
             color: flash ? Go.primary : null,
           )
         : null;
-    if (!tk.word) return TextSpan(text: tk.text, style: style);
-    return TextSpan(text: tk.text, style: style, recognizer: _tap);
+    if (!tk.word) return TextSpan(text: tk.text, style: selStyle);
+
+    // 词内连字符换成不可断行连字符（U+2011，外观与 "-" 一致）：
+    // 长复合词保持整体换行，不再出现 "privacy-" 留在行尾、后半截掉到下一行。
+    final display = tk.text.replaceAll('-', '\u2011');
+    TextStyle? fit;
+    if (widget.maxWidth.isFinite && display.length >= 8) {
+      final base = DefaultTextStyle.of(context).style;
+      final width = _wordWidth(display, base);
+      if (width > widget.maxWidth) {
+        // 比整行还长的单词：等比缩到行宽内。宁可小一点，也不拆词或裁字。
+        final ratio = (widget.maxWidth / width * 0.97).clamp(0.4, 1.0);
+        final fs = (base.fontSize ?? Go.fsBody) * ratio;
+        fit = TextStyle(
+          fontSize: fs,
+          height: base.height == null ? null : base.height! / ratio,
+        );
+      }
+    }
+    final style = fit == null ? selStyle : (selStyle == null ? fit : fit.merge(selStyle));
+    return TextSpan(text: display, style: style, recognizer: _tap);
+  }
+
+  /// 单词实际渲染宽度（含系统字体缩放），按字号/字体/缩放缓存。
+  double _wordWidth(String text, TextStyle base) {
+    final scaler = MediaQuery.textScalerOf(context);
+    final key = '${base.fontSize}|${base.fontFamily}|${base.fontWeight}|${base.letterSpacing}|${scaler.scale(1)}|$text';
+    final cached = _wCache[key];
+    if (cached != null) return cached;
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: base),
+      textDirection: Directionality.of(context),
+      textScaler: scaler,
+      maxLines: 1,
+    )..layout();
+    final w = tp.width;
+    tp.dispose();
+    _wCache[key] = w;
+    return w;
   }
 }
 
