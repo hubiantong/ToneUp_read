@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:toneup_read/services/app_config_service.dart';
 
 /// 朗读：优先 Edge 神经音色（在线合成 → 本地缓存 mp3 → MediaPlayer 播放），
 /// 无网 / 接口失败 / 连续出错时回退系统 TTS。
@@ -16,6 +17,9 @@ import 'package:path_provider/path_provider.dart';
 /// crypto + flutter），播放复用 Android 原生 MediaPlayer（见 MainActivity），
 /// 不引入任何音频插件，也不打包语音模型。
 class TtsService {
+  TtsService(this._config);
+
+  final AppConfigService _config;
   final FlutterTts _tts = FlutterTts();
 
   /// 播放状态（true=正在朗读）。UI 应监听它，而不是自己猜。
@@ -194,7 +198,7 @@ class TtsService {
     final seq = ++_seq;
     playing.value = true;
 
-    if (_edgeEnabled) {
+    if (_config.ttsEdge && _edgeEnabled) {
       final edgeRate = _edgeRate(rate);
       try {
         final file = await _edgeFile(input, edgeRate).timeout(_edgeTimeout);

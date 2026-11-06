@@ -11,6 +11,8 @@ class AppConfigService extends ChangeNotifier {
   // 阅读设置（对齐 store.reader）
   double _fontSize = 18;
   double _lineHeight = 1.8;
+  // 朗读引擎：true=Edge 在线神经音色，false=系统 TTS（离线）。
+  bool _ttsEdge = true;
 
   // 云端配置：地址与密钥全部内置在 App 里，用户既看不到也改不了（「我的」页已无服务配置入口）。
   // 密钥不落源码，构建时用 --dart-define 注入，见 tool/release.ps1。
@@ -44,6 +46,9 @@ class AppConfigService extends ChangeNotifier {
   bool get darkMode => _darkMode;
   double get fontSize => _fontSize;
   double get lineHeight => _lineHeight;
+
+  /// true=Edge 在线神经音色（默认），false=系统 TTS。
+  bool get ttsEdge => _ttsEdge;
 
   /// 云端文章接口（列表 / 详情 / 缓存正文）。
   String get articleApiBase => _articleApiBase;
@@ -88,6 +93,7 @@ class AppConfigService extends ChangeNotifier {
     _darkMode = _prefs!.getBool('dark_mode') ?? true;
     _fontSize = _prefs!.getDouble('reader_fontSize') ?? 18;
     _lineHeight = _prefs!.getDouble('reader_lineHeight') ?? 1.8;
+    _ttsEdge = _prefs!.getBool('tts_edge') ?? true;
 
     _articleApiBase = _prefs!.getString(_kArticleApiBase) ?? defaultArticleApiBase;
     _gatewayBase = _prefs!.getString(_kGatewayBase) ?? defaultGatewayBase;
@@ -129,6 +135,14 @@ class AppConfigService extends ChangeNotifier {
   Future<void> setDarkMode(bool v) async {
     _darkMode = v;
     await _prefs!.setBool('dark_mode', v);
+    notifyListeners();
+  }
+
+  /// 切换朗读引擎：true=Edge 在线神经音色，false=系统 TTS。
+  Future<void> setTtsEdge(bool v) async {
+    if (_ttsEdge == v) return;
+    _ttsEdge = v;
+    await _prefs!.setBool('tts_edge', v);
     notifyListeners();
   }
 

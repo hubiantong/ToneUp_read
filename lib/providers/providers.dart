@@ -20,7 +20,7 @@ final dbProvider = Provider((ref) => DbService());
 final httpProvider = Provider((ref) => HttpService());
 final appConfigProvider = ChangeNotifierProvider<AppConfigService>((ref) => AppConfigService());
 final llmProvider = Provider((ref) => LlmService(ref.watch(httpProvider), ref.read(appConfigProvider)));
-final ttsProvider = Provider((ref) => TtsService());
+final ttsProvider = Provider((ref) => TtsService(ref.read(appConfigProvider)));
 final translateProvider = Provider((ref) => TranslateService(ref.watch(llmProvider)));
 final vocabProvider = Provider((ref) => VocabService(ref.watch(dbProvider), ref.watch(llmProvider)));
 final updateServiceProvider = Provider((ref) => UpdateService());

@@ -91,6 +91,7 @@ class _MineScreenState extends ConsumerState<MineScreen> {
   @override
   Widget build(BuildContext context) {
     final update = ref.watch(updateProvider);
+    final cfg = ref.watch(appConfigProvider);
 
     return GoPage(
       topPad: false,
@@ -103,6 +104,23 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                 child: GoStagger(
                   spacing: Go.sp8,
                   children: [
+                    // —— 朗读 ——
+                    GoSection(
+                      title: '朗读',
+                      children: [
+                        GoCard(
+                          padding: EdgeInsets.zero,
+                          child: _navRow(
+                            icon: 'tts',
+                            title: '朗读引擎',
+                            sub: cfg.ttsEdge ? 'Edge 神经音色 · 需联网' : '系统语音 · 离线可用',
+                            onTap: _pickTtsEngine,
+                            divider: false,
+                          ),
+                        ),
+                      ],
+                    ),
+
                     // —— 数据管理 ——
                     GoSection(
                       title: '数据管理',
@@ -183,6 +201,93 @@ class _MineScreenState extends ConsumerState<MineScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 选择朗读引擎：Edge（在线神经音色）/ 系统 TTS（离线）。
+  Future<void> _pickTtsEngine() async {
+    final cfg = ref.read(appConfigProvider);
+    final picked = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Go.scrim,
+      builder: (c) => SafeArea(
+        top: false,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp4, Go.sp6, Go.sp6),
+          decoration: const BoxDecoration(
+            color: Go.glassBgStrong,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(Go.rXl)),
+            border: Border(top: BorderSide(color: Go.glassBorder)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: Go.sp10,
+                  height: 3,
+                  decoration: BoxDecoration(color: Go.outlineStrong, borderRadius: BorderRadius.circular(Go.rFull)),
+                ),
+              ),
+              const SizedBox(height: Go.sp5),
+              Text('朗读引擎', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w700, color: Go.onSurface)),
+              const SizedBox(height: Go.sp2),
+              _engineOption(
+                selected: cfg.ttsEdge,
+                title: 'Edge 神经音色',
+                sub: '在线合成，发音更自然；需要联网',
+                onTap: () => Navigator.pop(c, true),
+              ),
+              _engineOption(
+                selected: !cfg.ttsEdge,
+                title: '系统语音',
+                sub: '离线可用；部分机型音色偏机械',
+                onTap: () => Navigator.pop(c, false),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    // 点的就是当前引擎：只关面板，不要打断正在念的声音。
+    if (picked == cfg.ttsEdge) return;
+    await ref.read(appConfigProvider).setTtsEdge(picked);
+    // 换引擎时立刻停掉正在念的声音，避免两种音色叠着播。
+    await ref.read(ttsProvider).stop();
+  }
+
+  Widget _engineOption({required bool selected, required String title, required String sub, required VoidCallback onTap}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(Go.rMd),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: Go.sp3, horizontal: Go.sp2),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: Go.fsBodySm,
+                      fontWeight: FontWeight.w600,
+                      color: selected ? Go.primary : Go.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: Go.sp1),
+                  Text(sub, style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+                ],
+              ),
+            ),
+            if (selected) const GoIcon('check', size: 18, color: Go.primary),
+          ],
+        ),
       ),
     );
   }
