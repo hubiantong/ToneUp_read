@@ -4,10 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// 主题偏好：跟随系统 / 浅色 / 深色。
+enum ThemePref { system, light, dark }
+
 class AppConfigService extends ChangeNotifier {
   SharedPreferences? _prefs;
   bool _secureOk = !Platform.environment.containsKey('FLUTTER_TEST');
-  bool _darkMode = true;
+  ThemePref _themePref = ThemePref.dark;
   // 阅读设置（对齐 store.reader）
   double _fontSize = 18;
   double _lineHeight = 1.8;
@@ -43,7 +46,7 @@ class AppConfigService extends ChangeNotifier {
 
   static const _secure = FlutterSecureStorage(aOptions: AndroidOptions());
 
-  bool get darkMode => _darkMode;
+  ThemePref get themePref => _themePref;
   double get fontSize => _fontSize;
   double get lineHeight => _lineHeight;
 
@@ -90,7 +93,17 @@ class AppConfigService extends ChangeNotifier {
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    _darkMode = _prefs!.getBool('dark_mode') ?? true;
+    final savedTheme = _prefs!.getString('theme_mode');
+    if (savedTheme != null) {
+      _themePref = ThemePref.values.firstWhere(
+        (e) => e.name == savedTheme,
+        orElse: () => ThemePref.dark,
+      );
+    } else {
+      // 旧版本只有 dark_mode bool：true/缺省 → 深色，false → 浅色。
+      final legacyDark = _prefs!.getBool('dark_mode');
+      _themePref = legacyDark == false ? ThemePref.light : ThemePref.dark;
+    }
     _fontSize = _prefs!.getDouble('reader_fontSize') ?? 18;
     _lineHeight = _prefs!.getDouble('reader_lineHeight') ?? 1.8;
     _ttsEdge = _prefs!.getBool('tts_edge') ?? true;
@@ -132,11 +145,15 @@ class AppConfigService extends ChangeNotifier {
     await _prefs?.setString(legacyKey, value);
   }
 
-  Future<void> setDarkMode(bool v) async {
-    _darkMode = v;
-    await _prefs!.setBool('dark_mode', v);
+  Future<void> setThemePref(ThemePref v) async {
+    if (_themePref == v) return;
+    _themePref = v;
+    await _prefs!.setString('theme_mode', v.name);
     notifyListeners();
   }
+
+  /// 兼容旧调用；等价于 [setThemePref]。
+  Future<void> setDarkMode(bool v) => setThemePref(v ? ThemePref.dark : ThemePref.light);
 
   /// 切换朗读引擎：true=Edge 在线神经音色，false=系统 TTS。
   Future<void> setTtsEdge(bool v) async {

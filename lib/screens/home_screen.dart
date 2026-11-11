@@ -38,6 +38,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   final List<String> _sources = [];
 
   String? _source; // null = 全部
+  String _q = ''; // 关键词（中英文标题 / 来源）
+  DateTime? _from; // 发布时间起（含）
+  DateTime? _to; // 发布时间止（含，按天）
   int _page = 1;
   int _total = 0;
   bool _loading = true;
@@ -46,6 +49,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _offline = false;
   bool _noKey = false;
   String _error = '';
+  /// 请求代际：筛选/来源切换后，旧的第一页/加载更多结果一律丢弃。
+  int _requestSeq = 0;
+  /// 服务端是否接受 q/since/until；一旦带参请求失败并成功用无参请求兜底，就置 false。
+  bool _serverFilters = true;
 
   @override
   void initState() {
@@ -62,6 +69,42 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   bool get _hasMore => !_offline && !_noKey && _items.length < _total;
 
+  bool get _hasFilter => _q.trim().isNotEmpty || _from != null || _to != null;
+
+  /// 客户端兜底过滤：服务端可能忽略 q/since/until，这里始终再筛一遍已返回的行。
+  bool _match(Map<String, dynamic> it) {
+    final kw = _q.trim().toLowerCase();
+    if (kw.isNotEmpty) {
+      final en = '${it['title'] ?? ''}'.toLowerCase();
+      final zh = (_zh['${it['title'] ?? ''}'] ?? '').toLowerCase();
+      final source = '${it['source'] ?? ''}'.toLowerCase();
+      if (!en.contains(kw) && !zh.contains(kw) && !source.contains(kw)) return false;
+    }
+    if (_from != null || _to != null) {
+      final d = _dateOf(it['published_at']);
+      if (d == null) return false;
+      if (_from != null && d.isBefore(_from!)) return false;
+      if (_to != null && d.isAfter(DateTime(_to!.year, _to!.month, _to!.day, 23, 59, 59, 999))) return false;
+    }
+    return true;
+  }
+
+  List<Map<String, dynamic>> get _visibleItems => _hasFilter ? _items.where(_match).toList() : _items;
+
+  String _fmtDay(DateTime d) => '${d.year}-${_two(d.month)}-${_two(d.day)}';
+
+  String get _filterSummary {
+    final parts = <String>[];
+    if (_q.trim().isNotEmpty) parts.add('关键词「${_q.trim()}」');
+    if (_from != null || _to != null) {
+      final from = _from == null ? '不限' : _fmtDay(_from!);
+      final to = _to == null ? '不限' : _fmtDay(_to!);
+      parts.add('$from ~ $to');
+    }
+    if (!_serverFilters) parts.add('本地过滤');
+    return parts.join(' · ');
+  }
+
   void _onScroll() {
     if (!_scroll.hasClients) return;
     final pos = _scroll.position;
@@ -76,6 +119,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _loadFirst() async {
     if (!mounted) return;
+    final seq = ++_requestSeq;
     final cfg = ref.read(appConfigProvider);
     if (cfg.articleApiKey.trim().isEmpty) {
       // 未配置密钥：不发网络请求，给引导横幅 + 本地缓存兜底。
@@ -87,7 +131,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         _page = 1;
         _total = 0;
       });
-      await _loadCached();
+      await _loadCached(seq);
       return;
     }
     setState(() {
@@ -96,10 +140,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       _error = '';
     });
     try {
-      final res =
-          await ref.read(remoteArticleProvider).list(source: _source, page: 1, perPage: _perPage);
+      final useFilters = _hasFilter && _serverFilters;
+      Map<String, dynamic> res;
+      try {
+        res = await ref.read(remoteArticleProvider).list(
+              source: _source,
+              q: useFilters && _q.trim().isNotEmpty ? _q.trim() : null,
+              since: useFilters ? _from : null,
+              until: useFilters ? _to : null,
+              page: 1,
+              perPage: _perPage,
+            );
+      } catch (_) {
+        if (!useFilters) rethrow;
+        // 服务端可能不认识筛选参数：去掉后重试一次，客户端仍会兜底过滤。
+        res = await ref.read(remoteArticleProvider).list(
+              source: _source,
+              page: 1,
+              perPage: _perPage,
+            );
+        _serverFilters = false;
+      }
       final rows = _parseItems(res);
-      if (!mounted) return;
+      if (!mounted || seq != _requestSeq) return;
       setState(() {
         _items
           ..clear()
@@ -112,16 +175,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         _collectSources(rows);
       });
       await _fillZh(rows);
+      if (!mounted || seq != _requestSeq) return;
       await _refreshCached();
     } catch (e) {
       // 列表失败 → 离线兜底：本地已缓存的行。
       var cached = const <Map<String, dynamic>>[];
       try {
-        cached = await ref.read(remoteArticleProvider).cachedArticles(source: _source);
+        cached = await ref.read(remoteArticleProvider).cachedArticles(
+              source: _source,
+              q: _q.trim().isEmpty ? null : _q.trim(),
+              since: _from,
+              until: _to,
+            );
       } catch (_) {
         cached = const [];
       }
-      if (!mounted) return;
+      if (!mounted || seq != _requestSeq) return;
       final offlineRows = cached.map(_fromRow).toList();
       setState(() {
         _loading = false;
@@ -141,20 +210,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       });
       if (offlineRows.isNotEmpty) {
         await _fillZh(offlineRows);
+        if (!mounted || seq != _requestSeq) return;
         await _refreshCached();
       }
     }
   }
 
   /// 未配置密钥时的本地缓存兜底（不打网络，`titleZhBatch` 只回读 title_zh 表）。
-  Future<void> _loadCached() async {
+  Future<void> _loadCached(int seq) async {
     var rows = const <Map<String, dynamic>>[];
     try {
-      rows = await ref.read(remoteArticleProvider).cachedArticles();
+      rows = await ref.read(remoteArticleProvider).cachedArticles(
+            source: _source,
+            q: _q.trim().isEmpty ? null : _q.trim(),
+            since: _from,
+            until: _to,
+          );
     } catch (_) {
       rows = const [];
     }
-    if (!mounted) return;
+    if (!mounted || seq != _requestSeq) return;
     final mapped = rows.map(_fromRow).toList();
     setState(() {
       _items
@@ -164,20 +239,43 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       _collectSources(mapped);
     });
     await _fillZh(mapped);
+    if (!mounted || seq != _requestSeq) return;
     await _refreshCached();
   }
 
   Future<void> _loadMore() async {
     if (_loading || _loadingMore || _offline || _noKey) return;
     if (_items.isEmpty || _items.length >= _total) return;
+    final seq = _requestSeq;
     final next = _page + 1;
     setState(() => _loadingMore = true);
     try {
-      final res = await ref
-          .read(remoteArticleProvider)
-          .list(source: _source, page: next, perPage: _perPage);
+      final useFilters = _hasFilter && _serverFilters;
+      Map<String, dynamic> res;
+      try {
+        res = await ref.read(remoteArticleProvider).list(
+              source: _source,
+              q: useFilters && _q.trim().isNotEmpty ? _q.trim() : null,
+              since: useFilters ? _from : null,
+              until: useFilters ? _to : null,
+              page: next,
+              perPage: _perPage,
+            );
+      } catch (_) {
+        if (!useFilters) rethrow;
+        // 与首页一致：服务端不支持筛选参数时退回无参请求，继续本地过滤。
+        res = await ref.read(remoteArticleProvider).list(
+              source: _source,
+              page: next,
+              perPage: _perPage,
+            );
+        _serverFilters = false;
+      }
       final rows = _parseItems(res);
-      if (!mounted) return;
+      if (!mounted || seq != _requestSeq) {
+        if (mounted) setState(() => _loadingMore = false);
+        return;
+      }
       setState(() {
         final seen = _items
             .map((e) => '${e['url'] ?? ''}')
@@ -196,7 +294,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       });
       await _fillZh(rows);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _requestSeq) {
+        if (mounted) setState(() => _loadingMore = false);
+        return;
+      }
       setState(() => _loadingMore = false);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('加载更多失败：${_errOf(e)}')));
@@ -207,6 +308,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (_source == s) return;
     setState(() {
       _source = s;
+      _items.clear();
+      _page = 1;
+      _total = 0;
+      _loading = true;
+      _error = '';
+      _offline = false;
+    });
+    await _loadFirst();
+  }
+
+  Future<void> _clearFilter() async {
+    if (!_hasFilter) return;
+    setState(() {
+      _q = '';
+      _from = null;
+      _to = null;
       _items.clear();
       _page = 1;
       _total = 0;
@@ -379,12 +496,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 title: '时文阅读',
                 style: GoAppBarStyle.floating,
                 actions: [
+                  GoIconBtn(
+                    icon: 'search',
+                    onTap: _openFilterSheet,
+                    color: _hasFilter ? context.go.primary : null,
+                  ),
                   GoIconBtn(icon: 'mine', onTap: _goMine),
                 ],
               ),
               if (_noKey) _keyBanner(),
               if (_offline) _offlineBanner(),
               _sourceRail(),
+              if (_hasFilter) _filterBar(),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () => _loadFirst(),
@@ -403,7 +526,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (_loading && _items.isEmpty) return _skeletonList();
     if (_items.isEmpty && _error.isNotEmpty) return _errorList();
     if (_items.isEmpty) return _emptyList();
-    return _list();
+    final items = _visibleItems;
+    if (items.isEmpty) return _noMatch();
+    return _list(items);
   }
 
   /// 未内置文章接口密钥时的提示横幅（正常发布版不会出现）。
@@ -412,19 +537,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       margin: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, 0),
       padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp3, Go.sp4, Go.sp3),
       decoration: BoxDecoration(
-        color: Go.primary90,
+        color: context.go.primary90,
         borderRadius: BorderRadius.circular(Go.rMd),
-        border: Border.all(color: Go.primary.withValues(alpha: 0.45), width: 0.5),
+        border: Border.all(color: context.go.primary.withValues(alpha: 0.45), width: 0.5),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: const [
-          GoIcon('settings', size: 16, color: Go.primary),
-          SizedBox(width: Go.sp3),
+        children: [
+          GoIcon('settings', size: 16, color: context.go.primary),
+          const SizedBox(width: Go.sp3),
           Expanded(
             child: Text(
               '本应用未内置文章接口密钥，暂时无法加载文章',
-              style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface, height: 1.5),
+              style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface, height: 1.5),
             ),
           ),
         ],
@@ -438,33 +563,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       margin: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, 0),
       padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp3, Go.sp3, Go.sp3),
       decoration: BoxDecoration(
-        color: Go.warning.withValues(alpha: 0.12),
+        color: context.go.warning.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(Go.rMd),
-        border: Border.all(color: Go.warning.withValues(alpha: 0.32), width: 0.5),
+        border: Border.all(color: context.go.warning.withValues(alpha: 0.32), width: 0.5),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const GoIcon('warning', size: 16, color: Go.onWarning),
+          GoIcon('warning', size: 16, color: context.go.warning),
           const SizedBox(width: Go.sp3),
-          const Expanded(
+          Expanded(
             child: Text(
               '网络不可用，显示已缓存',
-              style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface, height: 1.5),
+              style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface, height: 1.5),
             ),
           ),
           const SizedBox(width: Go.sp3),
           GestureDetector(
             onTap: _loadFirst,
             behavior: HitTestBehavior.opaque,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: Go.sp2, vertical: Go.sp1),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Go.sp2, vertical: Go.sp1),
               child: Text(
                 '重试',
                 style: TextStyle(
                   fontSize: Go.fsMeta,
                   fontWeight: FontWeight.w700,
-                  color: Go.primary,
+                  color: context.go.primary,
                 ),
               ),
             ),
@@ -499,10 +624,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp2),
         decoration: BoxDecoration(
-          color: on ? Go.primary : Go.glassBg,
+          color: on ? context.go.primary : context.go.glassBg,
           borderRadius: BorderRadius.circular(Go.rFull),
-          border: on ? null : Border.all(color: Go.glassBorder, width: 0.5),
-          boxShadow: Go.elev1,
+          border: on ? null : Border.all(color: context.go.glassBorder, width: 0.5),
+          boxShadow: context.go.elev1,
         ),
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: Go.r(320)),
@@ -513,12 +638,72 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             style: TextStyle(
               fontSize: Go.fsBodySm,
               fontWeight: FontWeight.w600,
-              color: on ? Go.onPrimary : Go.onSurface2,
+              color: on ? context.go.onPrimary : context.go.onSurface2,
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// 筛选生效时的紧凑提示条。
+  Widget _filterBar() => Container(
+        margin: const EdgeInsets.fromLTRB(Go.sp4, 0, Go.sp4, Go.sp2),
+        padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp2),
+        decoration: BoxDecoration(
+          color: context.go.primary95,
+          borderRadius: BorderRadius.circular(Go.rMd),
+          border: Border.all(color: context.go.primary.withValues(alpha: 0.3), width: 0.5),
+        ),
+        child: Row(
+          children: [
+            GoIcon('search', size: 14, color: context.go.primary),
+            const SizedBox(width: Go.sp2),
+            Expanded(
+              child: Text(
+                _filterSummary,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: Go.fsMeta, color: context.go.primary),
+              ),
+            ),
+            GestureDetector(
+              onTap: _clearFilter,
+              child: Text('清除', style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: context.go.primary)),
+            ),
+          ],
+        ),
+      );
+
+  Future<void> _openFilterSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _FilterSheet(
+        initialQ: _q,
+        initialFrom: _from,
+        initialTo: _to,
+        onApply: _applyFilter,
+      ),
+    );
+  }
+
+  void _applyFilter(String q, DateTime? from, DateTime? to) {
+    if (!mounted) return;
+    setState(() {
+      _q = q;
+      _from = from;
+      _to = to;
+      _items.clear();
+      _page = 1;
+      _total = 0;
+      _loading = true;
+      _error = '';
+      _offline = false;
+      _serverFilters = true;
+    });
+    _loadFirst();
   }
 
   Widget _skeletonList() {
@@ -566,34 +751,63 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Widget _emptyList() {
+    final filtered = _hasFilter && !_noKey;
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, Go.sp16),
       children: [
         GoEmpty(
-          icon: _noKey ? 'settings' : 'book',
-          title: _noKey ? '缺少文章接口密钥' : '这里还没有文章',
-          desc: _noKey ? '本应用未内置文章接口密钥，暂时无法加载文章' : '下拉刷新试试',
-          action: GoBtn(
-            label: '刷新',
-            onTap: () {
-              _loadFirst();
-            },
+          icon: _noKey ? 'settings' : (filtered ? 'search' : 'book'),
+          title: _noKey ? '缺少文章接口密钥' : (filtered ? '没有符合条件的文章' : '这里还没有文章'),
+          desc: _noKey
+              ? '本应用未内置文章接口密钥，暂时无法加载文章'
+              : (filtered ? '试试其他关键词或时间范围' : '下拉刷新试试'),
+          action: filtered
+              ? GoBtn(label: '清除筛选', kind: GoBtnKind.tonal, onTap: _clearFilter)
+              : GoBtn(
+                  label: '刷新',
+                  onTap: () {
+                    _loadFirst();
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// 有筛选条件但当前已加载页里没有匹配项：给出清除筛选 / 继续翻页入口。
+  Widget _noMatch() {
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, Go.sp16),
+      children: [
+        GoEmpty(
+          icon: 'search',
+          title: '没有符合条件的文章',
+          desc: _hasMore ? '可以继续加载更多结果，或调整筛选条件' : '试试其他关键词或时间范围',
+          action: Wrap(
+            spacing: Go.sp3,
+            runSpacing: Go.sp2,
+            alignment: WrapAlignment.center,
+            children: [
+              if (_hasMore) GoBtn(label: '加载更多', onTap: _loadMore),
+              GoBtn(label: '清除筛选', kind: GoBtnKind.tonal, onTap: _clearFilter),
+            ],
           ),
         ),
       ],
     );
   }
 
-  Widget _list() {
+  Widget _list(List<Map<String, dynamic>> items) {
     final footer = _hasMore ? 1 : 0;
     return ListView.builder(
       controller: _scroll,
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, Go.sp16),
-      itemCount: _items.length + footer,
+      itemCount: items.length + footer,
       itemBuilder: (context, i) {
-        if (i < _items.length) return _articleCard(_items[i]);
+        if (i < items.length) return _articleCard(items[i]);
         if (_loadingMore) {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: Go.sp6),
@@ -603,13 +817,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         return GestureDetector(
           onTap: _loadMore,
           behavior: HitTestBehavior.opaque,
-          child: const Padding(
-            padding: EdgeInsets.symmetric(vertical: Go.sp5),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: Go.sp5),
             child: Text(
               '加载更多',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Go.primary,
+                color: context.go.primary,
                 fontSize: Go.fsBodySm,
                 fontWeight: FontWeight.w600,
               ),
@@ -642,7 +856,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             child: Container(
               width: 3,
               decoration: BoxDecoration(
-                color: Go.primary,
+                color: context.go.primary,
                 borderRadius: BorderRadius.circular(Go.rFull),
               ),
             ),
@@ -664,11 +878,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         zhText,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: Go.fsH2,
                           fontWeight: FontWeight.w600,
                           height: Go.lhSnug,
-                          color: Go.onSurface,
+                          color: context.go.onSurface,
                         ),
                       ),
                       if (showEn) ...[
@@ -677,10 +891,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           en,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: Go.fsBodySm,
                             height: Go.lhSnug,
-                            color: Go.onSurface3,
+                            color: context.go.onSurface3,
                           ),
                         ),
                       ],
@@ -689,7 +903,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         _metaOf(it),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3),
+                        style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3),
                       ),
                     ],
                   ),
@@ -702,18 +916,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: Go.sp1),
                         decoration: BoxDecoration(
-                          color: Go.primary90,
+                          color: context.go.primary90,
                           borderRadius: BorderRadius.circular(Go.rFull),
-                          border: Border.all(color: Go.primary.withValues(alpha: 0.35), width: 0.5),
+                          border: Border.all(color: context.go.primary.withValues(alpha: 0.35), width: 0.5),
                         ),
                         child: Text(
                           source,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: Go.fsCap,
                             fontWeight: FontWeight.w600,
-                            color: Go.primary,
+                            color: context.go.primary,
                           ),
                         ),
                       ),
@@ -722,21 +936,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: Go.sp1),
                         decoration: BoxDecoration(
-                          color: Go.success.withValues(alpha: 0.16),
+                          color: context.go.success.withValues(alpha: 0.16),
                           borderRadius: BorderRadius.circular(Go.rFull),
                           border: Border.all(
-                            color: Go.success.withValues(alpha: 0.40),
+                            color: context.go.success.withValues(alpha: 0.40),
                             width: 0.5,
                           ),
                         ),
-                        child: const Text(
+                        child: Text(
                           '已缓存',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: Go.fsCap,
                             fontWeight: FontWeight.w600,
-                            color: Go.success,
+                            color: context.go.success,
                           ),
                         ),
                       ),
@@ -754,29 +968,237 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   /// 缓存正文时的全屏遮罩。
   Widget _openingOverlay() {
     return Container(
-      color: Go.scrim,
+      color: context.go.scrim,
       alignment: Alignment.center,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: Go.sp10, vertical: Go.sp8),
         decoration: BoxDecoration(
-          color: Go.surfaceRaised,
+          color: context.go.surfaceRaised,
           borderRadius: BorderRadius.circular(Go.rLg),
-          boxShadow: Go.shadow3,
+          boxShadow: context.go.shadow3,
         ),
-        child: const Column(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            PolySpinner(),
-            SizedBox(height: Go.sp4),
+            const PolySpinner(),
+            const SizedBox(height: Go.sp4),
             Text(
               '缓存正文…',
               style: TextStyle(
                 fontSize: Go.fsBodySm,
-                color: Go.onSurface2,
+                color: context.go.onSurface2,
                 fontWeight: FontWeight.w500,
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 文章筛选面板：自己持有 TextEditingController，避免关闭动画期间 controller 被提前释放。
+class _FilterSheet extends StatefulWidget {
+  const _FilterSheet({
+    required this.initialQ,
+    required this.initialFrom,
+    required this.initialTo,
+    required this.onApply,
+  });
+
+  final String initialQ;
+  final DateTime? initialFrom;
+  final DateTime? initialTo;
+  final void Function(String q, DateTime? from, DateTime? to) onApply;
+
+  @override
+  State<_FilterSheet> createState() => _FilterSheetState();
+}
+
+class _FilterSheetState extends State<_FilterSheet> {
+  late final TextEditingController _qCtrl;
+  DateTime? _from;
+  DateTime? _to;
+  int _preset = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _qCtrl = TextEditingController(text: widget.initialQ);
+    _from = widget.initialFrom;
+    _to = widget.initialTo;
+    _preset = _presetOf(_from, _to);
+  }
+
+  @override
+  void dispose() {
+    _qCtrl.dispose();
+    super.dispose();
+  }
+
+  static int _presetOf(DateTime? from, DateTime? to) {
+    if (from == null && to == null) return 0;
+    if (from == null || to == null) return -1;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final end = DateTime(to.year, to.month, to.day);
+    if (!end.isAtSameMomentAs(today)) return -1;
+    final days = end.difference(DateTime(from.year, from.month, from.day)).inDays + 1;
+    return const [7, 30, 90].contains(days) ? days : -1;
+  }
+
+  static String _fmtDay(DateTime d) => '${d.year}-${_two(d.month)}-${_two(d.day)}';
+  static String _two(int n) => n < 10 ? '0$n' : '$n';
+
+  void _applyPreset(int days) {
+    if (days <= 0) {
+      _from = null;
+      _to = null;
+      return;
+    }
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    _from = today.subtract(Duration(days: days - 1));
+    _to = today;
+  }
+
+  Future<void> _pickCustom() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year, now.month, now.day),
+      initialDateRange: _from != null && _to != null ? DateTimeRange(start: _from!, end: _to!) : null,
+      helpText: '选择发布时间范围',
+      saveText: '确定',
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _preset = -1;
+      _from = picked.start;
+      _to = picked.end;
+    });
+  }
+
+  void _submit() {
+    final q = _qCtrl.text.trim();
+    Navigator.pop(context);
+    widget.onApply(q, _from, _to);
+  }
+
+  Widget _presetChip(String label, bool on, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp2),
+          decoration: BoxDecoration(
+            color: on ? context.go.primary95 : Colors.transparent,
+            borderRadius: BorderRadius.circular(Go.rFull),
+            border: Border.all(color: on ? context.go.primary : context.go.outline, width: 0.5),
+          ),
+          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: on ? context.go.primary : context.go.onSurface3)),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final go = context.go;
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(
+        top: false,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp4, Go.sp6, Go.sp6),
+          decoration: BoxDecoration(
+            color: go.glassBgStrong,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(Go.rXl)),
+            border: Border(top: BorderSide(color: go.glassBorder)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: Go.sp10,
+                  height: 3,
+                  decoration: BoxDecoration(color: go.outlineStrong, borderRadius: BorderRadius.circular(Go.rFull)),
+                ),
+              ),
+              const SizedBox(height: Go.sp5),
+              Text('筛选文章', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w700, color: go.onSurface)),
+              const SizedBox(height: Go.sp4),
+              TextField(
+                controller: _qCtrl,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => _submit(),
+                style: TextStyle(fontSize: Go.fsBodySm, color: go.onSurface),
+                decoration: const InputDecoration(hintText: '搜索标题或来源'),
+              ),
+              const SizedBox(height: Go.sp5),
+              Text('发布时间', style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, letterSpacing: 0.4, color: go.onSurface3)),
+              const SizedBox(height: Go.sp3),
+              Wrap(
+                spacing: Go.sp2,
+                runSpacing: Go.sp2,
+                children: [
+                  _presetChip('全部', _preset == 0, () {
+                    setState(() {
+                      _preset = 0;
+                      _from = null;
+                      _to = null;
+                    });
+                  }),
+                  _presetChip('近 7 天', _preset == 7, () {
+                    setState(() {
+                      _preset = 7;
+                      _applyPreset(7);
+                    });
+                  }),
+                  _presetChip('近 30 天', _preset == 30, () {
+                    setState(() {
+                      _preset = 30;
+                      _applyPreset(30);
+                    });
+                  }),
+                  _presetChip('近 90 天', _preset == 90, () {
+                    setState(() {
+                      _preset = 90;
+                      _applyPreset(90);
+                    });
+                  }),
+                  _presetChip('自定义', _preset == -1, _pickCustom),
+                ],
+              ),
+              if (_from != null || _to != null) ...[
+                const SizedBox(height: Go.sp3),
+                Text(
+                  '${_from == null ? '不限' : _fmtDay(_from!)} ~ ${_to == null ? '不限' : _fmtDay(_to!)}',
+                  style: TextStyle(fontSize: Go.fsMeta, color: go.onSurface3),
+                ),
+              ],
+              const SizedBox(height: Go.sp6),
+              Row(
+                children: [
+                  Expanded(
+                    child: GoBtn(
+                      label: '重置',
+                      kind: GoBtnKind.tonal,
+                      onTap: () {
+                        _qCtrl.clear();
+                        setState(() {
+                          _preset = 0;
+                          _from = null;
+                          _to = null;
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: Go.sp3),
+                  Expanded(child: GoBtn(label: '应用', onTap: _submit)),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

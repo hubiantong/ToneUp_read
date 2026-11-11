@@ -121,7 +121,7 @@ class GoIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final icon = Icon(goIcon(name), size: size, color: color ?? Go.onSurface2);
+    final icon = Icon(goIcon(name), size: size, color: color ?? context.go.onSurface2);
     if (!spin) return icon;
     return _Spin(child: icon);
   }

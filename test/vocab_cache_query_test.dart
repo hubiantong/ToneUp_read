@@ -7,11 +7,6 @@ import 'package:toneup_read/services/vocab_service.dart';
 
 import 'fake_db.dart';
 
-/// 词卡缓存的现行结构（对齐 DictService.lookupCombined 冻结 shape）。
-String _cachedCard(String word) =>
-    '{"kind":"dict","found":true,"word":"$word","phonetic":"ˈprɪvəsi",'
-    '"senses":[{"pos":"n.","definition":"隐私","en":"the state of being private"}]}';
-
 class _Rec extends FakeDb {
   final List<String> log = [];
   static const heads = 120;
@@ -19,17 +14,23 @@ class _Rec extends FakeDb {
   @override
   Future<List<Map<String, dynamic>>> select(String sql, [List<Object?>? params]) async {
     log.add(sql);
-    if (sql.contains('FROM vocab_head')) {
+    if (sql.startsWith('SELECT head, kind, firstSeen, lastSeen, occCount, family, fsrs_state, fsrs_due, zh FROM vocab_head')) {
       return [
         for (var i = 0; i < heads; i++)
-          <String, dynamic>{'head': 'w$i', 'kind': 'word', 'firstSeen': 0, 'lastSeen': 0, 'occCount': 1, 'family': '[]', 'fsrs_state': 0, 'fsrs_due': 0}
+          <String, dynamic>{
+            'head': 'w$i',
+            'kind': 'word',
+            'firstSeen': 0,
+            'lastSeen': 0,
+            'occCount': 1,
+            'family': '[]',
+            'fsrs_state': 0,
+            'fsrs_due': 0,
+            'zh': '隐私',
+          }
       ];
     }
     if (sql.contains('FROM vocab_occ')) return [];
-    if (sql.contains('FROM word_cache')) {
-      final first = (params ?? []).isNotEmpty ? '${params!.first}' : 'x';
-      return [<String, dynamic>{'word': first, 'lemma': first, 'result': _cachedCard(first)}];
-    }
     return [];
   }
 }
@@ -39,22 +40,13 @@ VocabService _svc(_Rec db) => VocabService(db, LlmService(HttpService(), AppConf
 List<String> _cacheSql(_Rec db) => db.log.where((s) => s.contains('FROM word_cache')).toList();
 
 void main() {
-  test('getHeads 按批读取 result，不再一次全表拉取', () async {
+  test('getHeads 直接从 vocab_head 取 zh，不再全量解析 word_cache', () async {
     final db = _Rec();
     final heads = await _svc(db).getHeads();
 
-    final qs = _cacheSql(db);
-    expect(qs, isNotEmpty);
-    for (final q in qs) {
-      expect(q, contains('IN ('), reason: '必须按批次限定，不能无界拉取: $q');
-    }
-    expect(qs.any((q) => q.trim() == 'SELECT word, lemma, result FROM word_cache'), isFalse);
-    expect(qs.length, 2, reason: '120 个词应分成 100 + 20 两批');
-
-    // 缓存是现行 dict 卡片 JSON：zh 取首个义项的 definition（中文），不再是裸 text 字段。
-    final w0 = heads.firstWhere((h) => h['head'] == 'w0');
-    expect(w0['zh'], '隐私', reason: 'dict 卡片的中文释义应取 senses[0].definition');
-    expect(heads.firstWhere((h) => h['head'] == 'w100')['zh'], '隐私', reason: '第二批同样要解析出 zh');
+    expect(_cacheSql(db), isEmpty, reason: '词汇页不应再查 word_cache: ${_cacheSql(db)}');
+    expect(heads, hasLength(_Rec.heads));
+    expect(heads.every((h) => h['zh'] == '隐私'), isTrue, reason: 'zh 应来自 vocab_head.zh');
   });
 
   test('getHeads 对 vocab_occ 只做聚合，不再整表拉取', () async {
@@ -69,7 +61,7 @@ void main() {
     expect(qs.any((q) => q.contains('ORDER BY at DESC')), isFalse);
   });
 
-  test('getHeads 只查vocab_occ 一次，来源数与最近句合并在同一次聚合里', () async {
+  test('getHeads 只查 vocab_occ 一次，来源数与最近句合并在同一次聚合里', () async {
     final db = _Rec();
     await _svc(db).getHeads();
 

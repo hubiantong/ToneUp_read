@@ -33,15 +33,25 @@ class RemoteArticleService {
   Map<String, String> get _auth => {'X-API-Key': _cfg.articleApiKey};
 
   /// 文章列表（原始响应：items/total/page/perPage），并把每条元信息回写本地表。
+  ///
+  /// [q] / [since] / [until] 为可选的标题关键词与发布时间范围（本机时间），
+  /// 会随请求发给自建接口；接口若不认识这些参数而忽略，调用方仍需做客户端兜底过滤。
   Future<Map<String, dynamic>> list({
     String? source,
     String status = 'accepted',
+    String? q,
+    DateTime? since,
+    DateTime? until,
     int page = 1,
     int perPage = 20,
   }) async {
+    final kw = q?.trim() ?? '';
     final qs = <String>[
       if (source != null && source.isNotEmpty) 'source=${Uri.encodeComponent(source)}',
       'status=${Uri.encodeComponent(status)}',
+      if (kw.isNotEmpty) 'q=${Uri.encodeComponent(kw)}',
+      if (since != null) 'since=${since.millisecondsSinceEpoch ~/ 1000}',
+      if (until != null) 'until=${until.millisecondsSinceEpoch ~/ 1000}',
       'page=$page',
       'per_page=$perPage',
     ];
@@ -221,19 +231,48 @@ class RemoteArticleService {
   }
 
   /// 离线兜底列表：本地已缓存（cachedAt 有值或已有正文）的行，按 cachedAt 倒序。
-  Future<List<Map<String, dynamic>>> cachedArticles({String? source}) async {
-    final where = StringBuffer("(cachedAt IS NOT NULL OR IFNULL(plainText,'') <> '')");
+  ///
+  /// 关键词同时匹配英文标题与 `title_zh` 中文标题；时间范围按 `publishedAt`（毫秒）。
+  Future<List<Map<String, dynamic>>> cachedArticles({
+    String? source,
+    String? q,
+    DateTime? since,
+    DateTime? until,
+  }) async {
+    final where = StringBuffer("(a.cachedAt IS NOT NULL OR IFNULL(a.plainText,'') <> '')");
     final args = <Object?>[];
+    var join = '';
     if (source != null && source.isNotEmpty) {
-      where.write(' AND source = ?');
+      where.write(' AND a.source = ?');
       args.add(source);
     }
+    final kw = q?.trim() ?? '';
+    if (kw.isNotEmpty) {
+      join = ' LEFT JOIN title_zh t ON t.title = a.title';
+      final like = '%${_escapeLike(kw)}%';
+      where.write(" AND (a.title LIKE ? ESCAPE '\\' OR t.zh LIKE ? ESCAPE '\\')");
+      args
+        ..add(like)
+        ..add(like);
+    }
+    if (since != null) {
+      where.write(' AND a.publishedAt >= ?');
+      args.add(since.millisecondsSinceEpoch);
+    }
+    if (until != null) {
+      where.write(' AND a.publishedAt <= ?');
+      args.add(until.millisecondsSinceEpoch);
+    }
     final rows = await _db.select(
-      'SELECT * FROM articles WHERE $where ORDER BY IFNULL(cachedAt, 0) DESC',
+      'SELECT a.* FROM articles a$join WHERE $where ORDER BY IFNULL(a.cachedAt, 0) DESC',
       args,
     );
     return rows.map((e) => Map<String, dynamic>.of(e)).toList();
   }
+
+  /// SQLite LIKE 的通配符转义：`\` `%` `_`。
+  static String _escapeLike(String s) =>
+      s.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
 
   /// 批量取标题中译：先查 `title_zh`，缺失的并发（≤3）走网关翻译并回写。
   /// 单个失败静默跳过（调用方回落英文标题）。

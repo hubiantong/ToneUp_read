@@ -89,7 +89,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
             title: '复习',
             style: GoAppBarStyle.floating,
             leading: GoBack(),
-            actions: [Text('${_cards.length} 张', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))],
+            actions: [Text('${_cards.length} 张', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3))],
           ),
           Expanded(
             child: card != null
@@ -103,25 +103,25 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                             child: Container(
                               width: double.infinity,
                               padding: const EdgeInsets.all(Go.sp10),
-                              decoration: BoxDecoration(color: Go.surface, borderRadius: BorderRadius.circular(Go.rXl), boxShadow: Go.elev2),
+                              decoration: BoxDecoration(color: context.go.surface, borderRadius: BorderRadius.circular(Go.rXl), boxShadow: context.go.elev2),
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Text('${card['head']}', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w700, color: Go.onSurface)),
+                                  Text('${card['head']}', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w700, color: context.go.onSurface)),
                                   const SizedBox(height: Go.sp6),
                                   if (_revealed)
                                     Column(
                                       children: [
-                                        if ('${card['zh']}'.isNotEmpty) Text('${card['zh']}', textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsBody, color: Go.onSurface)),
+                                        if ('${card['zh']}'.isNotEmpty) Text('${card['zh']}', textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBody, color: context.go.onSurface)),
                                         if ('${card['sentence']}'.isNotEmpty)
                                           Padding(
                                             padding: const EdgeInsets.only(top: Go.sp3),
-                                            child: Text('“${card['sentence']}”', textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3, height: 1.6, fontStyle: FontStyle.italic)),
+                                            child: Text('“${card['sentence']}”', textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface3, height: 1.6, fontStyle: FontStyle.italic)),
                                           ),
                                       ],
                                     )
                                   else
-                                    const Text('点击显示释义', style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3)),
+                                    Text('点击显示释义', style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface3)),
                                 ],
                               ),
                             ),
@@ -134,7 +134,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                             const SizedBox(width: Go.sp3),
                             _grade('模糊', const Color(0xFFE08A2B), () => _answer(2)),
                             const SizedBox(width: Go.sp3),
-                            _grade('记得', Go.primary, () => _answer(3)),
+                            _grade('记得', context.go.primary, () => _answer(3)),
                             const SizedBox(width: Go.sp3),
                             _grade('轻松', const Color(0xFF2D9E63), () => _answer(4)),
                           ],
@@ -156,7 +156,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
             padding: const EdgeInsets.symmetric(vertical: Go.sp4),
             alignment: Alignment.center,
             decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(Go.rLg)),
-            child: Text(label, style: const TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: Colors.white)),
+            child: Text(label, style: TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: context.go.onPrimary)),
           ),
         ),
       );

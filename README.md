@@ -26,10 +26,11 @@
 
   - 从自建文章接口拉取列表，卡片展示中文标题（客户端机翻并落库缓存）、来源、发布时间与词数。
   - 来源筛选、下拉刷新、滚动到底自动加载更多（每页 20 条）；已缓存文章带「已缓存」小标。
+  - **关键词 / 发布时间筛选**：支持中英文标题、来源关键词与近 7/30/90 天、自定义日期范围；筛选条件同时下发给接口并做客户端兜底过滤。
   - 点卡片自动缓存正文后进入阅读器；拉取失败自动回落本地已缓存列表，离线也能读缓存过的文章。
 - **沉浸式阅读器**
 
-  - 字号 / 行距可调并本地记忆；深色主题 + 地球动效背景。
+  - 字号 / 行距可调并本地记忆；深色 / 浅色 / 跟随系统主题（浅色下自动隐藏地球背景）。
   - **点词查词**：词典网关 `/dict` + `/en` 双源合成结构化词卡——音标、发音、中英多义项（带词性）、词形变化、考试标签、柯林斯星级与建议词。
   - **长按整句**取句，工具栏「选择」可点选多词；选区条提供 朗读 / 查询 / 翻译 / 收藏。
   - 句子翻译与短语释义走翻译网关（查询文本含空格自动走「短语」分支，不打词典）。
@@ -48,6 +49,7 @@
 - **我的**
 
   - 无需配置：文章接口与翻译网关的地址、密钥、模型全部内置，装上即用。
+  - 外观：主题支持跟随系统 / 浅色 / 深色三档，选择本地持久化。
   - 数据管理：清除缓存（文章与词典，保留词汇与句子）/ 清空全部数据。
   - 检查更新：应用内检查、下载并安装新版本。
 - **数据与隐私**
@@ -68,6 +70,7 @@
 - `share_plus`（分享导出）、`url_launcher`（打开原文）
 - `package_info_plus` + `open_filex` + `permission_handler`（应用内更新）
 - `crypto`、`flutter_lints` + `flutter_test` + `integration_test`
+- 离线词库（暂缓）：后续如需断网查词，可再引入内置词库资产与本地查询层
 
 设计走自建 token 体系（`lib/theme/go_tokens.dart` 的 `Go.*`），组件集中在 `lib/widgets/`，页面只做组合。
 
@@ -83,15 +86,15 @@ lib/
   providers/providers.dart   Riverpod 提供者 + 页面刷新信号（vocabRevision / articleRevision）
   services/                  服务层：云端文章缓存 / 词典 / 翻译网关 / 词汇 / 复习 / 更新 / TTS / 配置…
   screens/                   6 个页面：首页 / 阅读器 / 词汇 / 句子 / 复习 / 我的
-  theme/                     设计 token（Go.*）与主题
+  theme/                     设计 token（Go.* + 深浅调色板）与主题
   widgets/                   通用组件（GoCard / GoBtn / GoEmpty / GoPage…）、图标、底部导航、地球背景
-test/                        23 个测试文件（单元 + widget 测试）
-integration_test/            真机集成测试（更新链路 / 性能）
-test_driver/                 性能测试驱动
+test/                        25 个测试文件（单元 + widget 测试）
+integration_test/            真机集成测试（更新链路 / 性能 / 截图）
+test_driver/                 性能测试与截图驱动
 tool/                        发布脚本（release.ps1）与生成脚本（globe / tailwind）
 legacy/                      旧版 uni-app + Vue3 源码（v2.x，仅作历史留档）
 assets/                      应用图标与世界地图 GeoJSON
-docs/                        落地页（GitHub Pages，零构建）
+docs/                        落地页（GitHub Pages，零构建）与截图
 ```
 
 ---
@@ -118,17 +121,20 @@ flutter build apk --release `
 - 应用内无需填写任何服务地址或密钥——文章接口与翻译网关都已内置。
 - 朗读依赖系统 `TTS`：`Android 11+` 需要在 `AndroidManifest.xml` 的 `<queries>` 中声明 `android.intent.action.TTS_SERVICE`（仓库里已声明，升级 Flutter 插件后请留意别被覆盖）。
 - 写界面时注意：**别给可能放大的文字套固定高度**，系统字号放大后会被裁切（回归用例：`test/home_article_list_test.dart`）。
+- 界面预览截图（需连接 Android 设备 / 模拟器）：
+  ```bash
+  flutter drive --driver=test_driver/screenshot_driver.dart `
+    --target=integration_test/screenshot_test.dart
+  ```
+  产物写入 `docs/screenshots/`（`01_home.png` … `07_mine.png`）。
 - 发布：`powershell -ExecutionPolicy Bypass -File tool\release.ps1 -AppVersion X.Y.Z`，产物在 `dist/`。上传 GitHub Release 后需 **Publish**；客户端按 `releases/latest/download/` 固定链接更新，资产名 `ToneUP-read.apk` 与 `version.json` 不能改。详细步骤见 [上传安装包到 GitHub Release](docs/RELEASE_UPLOAD.md)。
 
 ---
 
 ## TODO
 
-1. 更新界面预览截图（旧版截图已随功能下线移除）
-2. 浅色主题切换入口（深浅主题均已实现，暂缺 `UI` 开关）
-3. 性能优化（超长文渲染、超大词汇表）
-4. 文章筛选（关键词 / 时间）
-5. 离线词库：更准的词频、音标与释义来源
+1. 更新界面预览截图（截图脚本已提供，需在真机 / 模拟器执行后补 `docs/screenshots/` 与 README 预览章节）
+2. 离线词库（暂缓）：需要时再引入内置词库资产与本地查询层
 
 ---
 

@@ -167,7 +167,7 @@ class _SentenceScreenState extends ConsumerState<SentenceScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp2, Go.sp6, Go.sp2),
-            child: Text('${_sentences.length} 个收藏句子', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+            child: Text('${_sentences.length} 个收藏句子', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp2, Go.sp6, Go.sp8),
@@ -187,14 +187,14 @@ class _SentenceScreenState extends ConsumerState<SentenceScreen> {
     return Container(
       margin: const EdgeInsets.only(bottom: Go.sp4),
       padding: const EdgeInsets.all(Go.sp5),
-      decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rLg), border: Border.all(color: Go.outline, width: 0.5)),
+      decoration: BoxDecoration(color: context.go.surface2, borderRadius: BorderRadius.circular(Go.rLg), border: Border.all(color: context.go.outline, width: 0.5)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('“${s['sentence']}”', style: const TextStyle(fontSize: Go.fsBody, height: 1.6, color: Go.onSurface)),
+          Text('“${s['sentence']}”', style: TextStyle(fontSize: Go.fsBody, height: 1.6, color: context.go.onSurface)),
           Padding(
             padding: const EdgeInsets.only(top: Go.sp2),
-            child: Text('${s['sourceLabel'] ?? '来源'} · ${s['articleTitle'] ?? ''}', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+            child: Text('${s['sourceLabel'] ?? '来源'} · ${s['articleTitle'] ?? ''}', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
           ),
           Padding(
             padding: const EdgeInsets.only(top: Go.sp4),
@@ -211,13 +211,13 @@ class _SentenceScreenState extends ConsumerState<SentenceScreen> {
             ),
           ),
           if (translating)
-            const Padding(
-              padding: EdgeInsets.only(top: Go.sp3),
+            Padding(
+              padding: const EdgeInsets.only(top: Go.sp3),
               child: Row(
                 children: [
-                  PolySpinner(size: 20),
-                  SizedBox(width: Go.sp3),
-                  Text('翻译中…', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+                  const PolySpinner(size: 20),
+                  const SizedBox(width: Go.sp3),
+                  Text('翻译中…', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
                 ],
               ),
             ),
@@ -225,11 +225,11 @@ class _SentenceScreenState extends ConsumerState<SentenceScreen> {
             Container(
               margin: const EdgeInsets.only(top: Go.sp3),
               padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp3),
-              decoration: BoxDecoration(color: Go.primary95, borderRadius: BorderRadius.circular(Go.rMd)),
+              decoration: BoxDecoration(color: context.go.primary95, borderRadius: BorderRadius.circular(Go.rMd)),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(trans, style: const TextStyle(fontSize: Go.fsBody, height: 1.6, color: Go.onSurface)),
+                  Text(trans, style: TextStyle(fontSize: Go.fsBody, height: 1.6, color: context.go.onSurface)),
                   Padding(
                     padding: const EdgeInsets.only(top: Go.sp2),
                     child: _miniBtn('复制译文', () async {
@@ -244,7 +244,7 @@ class _SentenceScreenState extends ConsumerState<SentenceScreen> {
           if (transErr != null && !translating)
             Padding(
               padding: const EdgeInsets.only(top: Go.sp3),
-              child: Text(transErr, style: const TextStyle(fontSize: Go.fsMeta, color: Go.danger)),
+              child: Text(transErr, style: TextStyle(fontSize: Go.fsMeta, color: context.go.danger)),
             ),
           if (analysis is Map) _analysisView(analysis),
         ],
@@ -256,8 +256,8 @@ class _SentenceScreenState extends ConsumerState<SentenceScreen> {
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp1),
-          decoration: BoxDecoration(border: Border.all(color: ai ? Go.primary : Go.outline), borderRadius: BorderRadius.circular(Go.rFull)),
-          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: ai ? Go.primary : Go.onSurface2)),
+          decoration: BoxDecoration(border: Border.all(color: ai ? context.go.primary : context.go.outline), borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: ai ? context.go.primary : context.go.onSurface2)),
         ),
       );
 
@@ -265,12 +265,12 @@ class _SentenceScreenState extends ConsumerState<SentenceScreen> {
     return Container(
       margin: const EdgeInsets.only(top: Go.sp4),
       padding: const EdgeInsets.only(top: Go.sp3),
-      decoration: const BoxDecoration(border: Border(top: BorderSide(color: Go.outline, width: 0.5, style: BorderStyle.solid))),
+      decoration: BoxDecoration(border: Border(top: BorderSide(color: context.go.outline, width: 0.5, style: BorderStyle.solid))),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if ('${analysis['translation'] ?? ''}'.isNotEmpty)
-            Padding(padding: const EdgeInsets.only(bottom: Go.sp3), child: Text('${analysis['translation']}', style: const TextStyle(fontSize: Go.fsBody, color: Go.onSurface))),
+            Padding(padding: const EdgeInsets.only(bottom: Go.sp3), child: Text('${analysis['translation']}', style: TextStyle(fontSize: Go.fsBody, color: context.go.onSurface))),
           if (analysis['chunks'] is List && (analysis['chunks'] as List).isNotEmpty)
             _analysisSection('语块', [
               for (final c in analysis['chunks'] as List) _analysisRow('${c['text']}', '${c['type']} · ${c['note']}'),
@@ -293,7 +293,7 @@ class _SentenceScreenState extends ConsumerState<SentenceScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(fontSize: Go.fsMeta, color: Go.primary, fontWeight: FontWeight.w600)),
+            Text(title, style: TextStyle(fontSize: Go.fsMeta, color: context.go.primary, fontWeight: FontWeight.w600)),
             ...rows,
           ],
         ),
@@ -301,12 +301,12 @@ class _SentenceScreenState extends ConsumerState<SentenceScreen> {
 
   Widget _analysisRow(String k, String v) => Container(
         padding: const EdgeInsets.symmetric(vertical: Go.sp2),
-        decoration: const BoxDecoration(border: Border(top: BorderSide(color: Go.outline, width: 0.5))),
+        decoration: BoxDecoration(border: Border(top: BorderSide(color: context.go.outline, width: 0.5))),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(k, style: const TextStyle(fontSize: Go.fsBody, color: Go.onSurface)),
-            Text(v, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+            Text(k, style: TextStyle(fontSize: Go.fsBody, color: context.go.onSurface)),
+            Text(v, style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
           ],
         ),
       );

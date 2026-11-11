@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -129,7 +129,7 @@ class _GlobeVignette extends StatelessWidget {
           gradient: RadialGradient(
             center: Alignment.center,
             radius: 0.95,
-            colors: [Go.bg.withValues(alpha: 0.0), Go.bg.withValues(alpha: 0.82)],
+            colors: [goDark.bg.withValues(alpha: 0.0), goDark.bg.withValues(alpha: 0.82)],
             stops: const [0.30, 1.0],
           ),
         ),
@@ -238,14 +238,14 @@ class _GlobePainter extends CustomPainter {
     final grid = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.8
-      ..color = Go.secondary.withValues(alpha: _baseOpacity * 0.62);
+      ..color = goDark.secondary.withValues(alpha: _baseOpacity * 0.62);
     final land = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0
-      ..color = Go.primary.withValues(alpha: _baseOpacity);
+      ..color = goDark.primary.withValues(alpha: _baseOpacity);
     final landFill = Paint()
       ..style = PaintingStyle.fill
-      ..color = Go.primary.withValues(alpha: _baseOpacity * 0.35);
+      ..color = goDark.primary.withValues(alpha: _baseOpacity * 0.35);
 
     // 经纬网
     for (final m in geo.meridians) {
@@ -258,7 +258,7 @@ class _GlobePainter extends CustomPainter {
     final eq = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0
-      ..color = Go.secondary.withValues(alpha: _baseOpacity * 0.95);
+      ..color = goDark.secondary.withValues(alpha: _baseOpacity * 0.95);
     canvas.drawPath(_polyPath([for (final b in geo.equator) ap(b)], center, r), eq);
 
     // 陆地
@@ -283,7 +283,7 @@ class _GlobePainter extends CustomPainter {
       if (p.z <= 0.05) continue;
       final o = _screen(p, center, r);
       final twinkle = 0.5 + 0.5 * math.sin(th * 2 + i * 1.7);
-      dot.color = Color.lerp(Go.secondary, Colors.white, 0.6)!.withValues(alpha: 0.30 + 0.45 * twinkle);
+      dot.color = Color.lerp(goDark.secondary, Colors.white, 0.6)!.withValues(alpha: 0.30 + 0.45 * twinkle);
       canvas.drawCircle(o, math.max(1.1, r * 0.008), dot);
     }
   }
@@ -291,7 +291,7 @@ class _GlobePainter extends CustomPainter {
   void _rim(Canvas canvas, Offset c, double r) {
     final outer = Paint()
       ..shader = RadialGradient(
-        colors: [Go.secondary.withValues(alpha: 0.0), Go.secondary.withValues(alpha: 0.0), Go.secondary.withValues(alpha: 0.20)],
+        colors: [goDark.secondary.withValues(alpha: 0.0), goDark.secondary.withValues(alpha: 0.0), goDark.secondary.withValues(alpha: 0.20)],
         stops: const [0, 0.80, 1.0],
       ).createShader(Rect.fromCircle(center: c, radius: r * 1.18));
     canvas.drawCircle(c, r * 1.18, outer);
@@ -299,7 +299,7 @@ class _GlobePainter extends CustomPainter {
     final edge = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.1
-      ..color = Go.secondary.withValues(alpha: 0.42);
+      ..color = goDark.secondary.withValues(alpha: 0.42);
     canvas.drawCircle(c, r, edge);
   }
 

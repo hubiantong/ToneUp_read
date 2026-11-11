@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/update_controller.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
@@ -104,6 +105,23 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                 child: GoStagger(
                   spacing: Go.sp8,
                   children: [
+                    // —— 外观 ——
+                    GoSection(
+                      title: '外观',
+                      children: [
+                        GoCard(
+                          padding: EdgeInsets.zero,
+                          child: _navRow(
+                            icon: 'settings',
+                            title: '主题',
+                            sub: _themeLabel(cfg.themePref),
+                            onTap: _pickTheme,
+                            divider: false,
+                          ),
+                        ),
+                      ],
+                    ),
+
                     // —— 朗读 ——
                     GoSection(
                       title: '朗读',
@@ -185,13 +203,13 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                       padding: const EdgeInsets.only(top: Go.sp8),
                       child: Column(
                         children: [
-                          const Text(
+                          Text(
                             '一潼上岸·阅读 · By 潼潼',
                             textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: Go.fsCap, color: Go.onSurfaceDisabled, letterSpacing: 0.5),
+                            style: TextStyle(fontSize: Go.fsCap, color: context.go.onSurfaceDisabled, letterSpacing: 0.5),
                           ),
                           const SizedBox(height: Go.sp1),
-                          Text(update.installedLabel, textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsCap, color: Go.onSurfaceDisabled)),
+                          Text(update.installedLabel, textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsCap, color: context.go.onSurfaceDisabled)),
                         ],
                       ),
                     ),
@@ -205,21 +223,27 @@ class _MineScreenState extends ConsumerState<MineScreen> {
     );
   }
 
-  /// 选择朗读引擎：Edge（在线神经音色）/ 系统 TTS（离线）。
-  Future<void> _pickTtsEngine() async {
+  String _themeLabel(ThemePref pref) => switch (pref) {
+        ThemePref.system => '跟随系统',
+        ThemePref.light => '浅色',
+        ThemePref.dark => '深色',
+      };
+
+  /// 选择主题：跟随系统 / 浅色 / 深色。
+  Future<void> _pickTheme() async {
     final cfg = ref.read(appConfigProvider);
-    final picked = await showModalBottomSheet<bool>(
+    final picked = await showModalBottomSheet<ThemePref>(
       context: context,
       backgroundColor: Colors.transparent,
-      barrierColor: Go.scrim,
+      barrierColor: context.go.scrim,
       builder: (c) => SafeArea(
         top: false,
         child: Container(
           padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp4, Go.sp6, Go.sp6),
-          decoration: const BoxDecoration(
-            color: Go.glassBgStrong,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(Go.rXl)),
-            border: Border(top: BorderSide(color: Go.glassBorder)),
+          decoration: BoxDecoration(
+            color: c.go.glassBgStrong,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(Go.rXl)),
+            border: Border(top: BorderSide(color: c.go.glassBorder)),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -229,11 +253,68 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                 child: Container(
                   width: Go.sp10,
                   height: 3,
-                  decoration: BoxDecoration(color: Go.outlineStrong, borderRadius: BorderRadius.circular(Go.rFull)),
+                  decoration: BoxDecoration(color: c.go.outlineStrong, borderRadius: BorderRadius.circular(Go.rFull)),
                 ),
               ),
               const SizedBox(height: Go.sp5),
-              Text('朗读引擎', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w700, color: Go.onSurface)),
+              Text('主题', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w700, color: c.go.onSurface)),
+              const SizedBox(height: Go.sp2),
+              _engineOption(
+                selected: cfg.themePref == ThemePref.system,
+                title: '跟随系统',
+                sub: '随系统的深色 / 浅色设置自动切换',
+                onTap: () => Navigator.pop(c, ThemePref.system),
+              ),
+              _engineOption(
+                selected: cfg.themePref == ThemePref.light,
+                title: '浅色',
+                sub: '白底深字，适合白天阅读',
+                onTap: () => Navigator.pop(c, ThemePref.light),
+              ),
+              _engineOption(
+                selected: cfg.themePref == ThemePref.dark,
+                title: '深色',
+                sub: '墨色底，适合夜间阅读',
+                onTap: () => Navigator.pop(c, ThemePref.dark),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (picked == null || !mounted || picked == cfg.themePref) return;
+    ref.read(themeModeProvider.notifier).set(picked);
+  }
+
+  /// 选择朗读引擎：Edge（在线神经音色）/ 系统 TTS（离线）。
+  Future<void> _pickTtsEngine() async {
+    final cfg = ref.read(appConfigProvider);
+    final picked = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: context.go.scrim,
+      builder: (c) => SafeArea(
+        top: false,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp4, Go.sp6, Go.sp6),
+          decoration: BoxDecoration(
+            color: c.go.glassBgStrong,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(Go.rXl)),
+            border: Border(top: BorderSide(color: c.go.glassBorder)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: Go.sp10,
+                  height: 3,
+                  decoration: BoxDecoration(color: c.go.outlineStrong, borderRadius: BorderRadius.circular(Go.rFull)),
+                ),
+              ),
+              const SizedBox(height: Go.sp5),
+              Text('朗读引擎', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w700, color: c.go.onSurface)),
               const SizedBox(height: Go.sp2),
               _engineOption(
                 selected: cfg.ttsEdge,
@@ -277,15 +358,15 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                     style: TextStyle(
                       fontSize: Go.fsBodySm,
                       fontWeight: FontWeight.w600,
-                      color: selected ? Go.primary : Go.onSurface,
+                      color: selected ? context.go.primary : context.go.onSurface,
                     ),
                   ),
                   const SizedBox(height: Go.sp1),
-                  Text(sub, style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+                  Text(sub, style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
                 ],
               ),
             ),
-            if (selected) const GoIcon('check', size: 18, color: Go.primary),
+            if (selected) GoIcon('check', size: 18, color: context.go.primary),
           ],
         ),
       ),
@@ -305,7 +386,7 @@ class _MineScreenState extends ConsumerState<MineScreen> {
   }) {
     return Column(
       children: [
-        if (divider) const Divider(height: 0.5, thickness: 0.5, color: Go.outline),
+        if (divider) Divider(height: 0.5, thickness: 0.5, color: context.go.outline),
         InkWell(
           onTap: onTap,
           child: Padding(
@@ -315,18 +396,18 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                 Container(
                   width: Go.r(64),
                   height: Go.r(64),
-                  decoration: BoxDecoration(color: danger ? Go.danger.withValues(alpha: 0.14) : Go.primary95, borderRadius: BorderRadius.circular(Go.rSm)),
-                  child: Center(child: GoIcon(icon, size: Go.r(48), color: danger ? Go.danger : Go.primary, spin: spin)),
+                  decoration: BoxDecoration(color: danger ? context.go.danger.withValues(alpha: 0.14) : context.go.primary95, borderRadius: BorderRadius.circular(Go.rSm)),
+                  child: Center(child: GoIcon(icon, size: Go.r(48), color: danger ? context.go.danger : context.go.primary, spin: spin)),
                 ),
                 const SizedBox(width: Go.sp4),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title, style: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w500, color: danger ? Go.error : Go.onSurface)),
+                      Text(title, style: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w500, color: danger ? context.go.error : context.go.onSurface)),
                       if (sub != null) ...[
                         const SizedBox(height: 1),
-                        Text(sub, style: TextStyle(fontSize: Go.fsMeta, color: highlight ? Go.primary : Go.onSurface3)),
+                        Text(sub, style: TextStyle(fontSize: Go.fsMeta, color: highlight ? context.go.primary : context.go.onSurface3)),
                       ],
                     ],
                   ),
@@ -336,9 +417,9 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                     width: Go.sp4,
                     height: Go.sp4,
                     margin: const EdgeInsets.only(right: Go.sp2),
-                    decoration: const BoxDecoration(color: Go.primary, shape: BoxShape.circle),
+                    decoration: BoxDecoration(color: context.go.primary, shape: BoxShape.circle),
                   ),
-                const Icon(Icons.chevron_right, size: 18, color: Go.onSurfaceDisabled),
+                Icon(Icons.chevron_right, size: 18, color: context.go.onSurfaceDisabled),
               ],
             ),
           ),

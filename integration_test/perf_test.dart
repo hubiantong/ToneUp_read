@@ -1,11 +1,15 @@
+import 'dart:convert';
 import 'dart:ui' show FrameTiming;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:sqflite/sqflite.dart' show ConflictAlgorithm;
 
+import 'package:toneup_read/models/models.dart';
 import 'package:toneup_read/providers/providers.dart';
+import 'package:toneup_read/screens/article_screen.dart';
 import 'package:toneup_read/screens/vocab_screen.dart';
 import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/services/db_service.dart';
@@ -83,8 +87,11 @@ void main() {
   });
 
   tearDownAll(() async {
-    await db.execute("DELETE FROM vocab_head WHERE head LIKE 'zzperf_%' OR head LIKE 'zzold_%' OR head LIKE 'zznew_%'");
-    await db.execute("DELETE FROM vocab_occ WHERE lemma LIKE 'zzperf_%' OR lemma LIKE 'zzold_%' OR lemma LIKE 'zznew_%'");
+    await db.execute("DELETE FROM articles WHERE guid = 'zzbig_long'");
+    await db.execute(
+        "DELETE FROM vocab_head WHERE head LIKE 'zzperf_%' OR head LIKE 'zzold_%' OR head LIKE 'zznew_%' OR head LIKE 'zzbig_%'");
+    await db.execute(
+        "DELETE FROM vocab_occ WHERE lemma LIKE 'zzperf_%' OR lemma LIKE 'zzold_%' OR lemma LIKE 'zznew_%' OR lemma LIKE 'zzbig_%'");
   });
 
   testWidgets('优化前 vs 优化后（同一设备同一数据）', (tester) async {
@@ -202,5 +209,74 @@ void main() {
     final navBare = await navFrames(const SizedBox(height: 80));
     debugPrint('CMP bottomnav ON=${_avg(navOn).toStringAsFixed(2)}ms(avg)/${_pct(navOn, 0.9).toStringAsFixed(2)}ms(p90)  '
         'BARE=${_avg(navBare).toStringAsFixed(2)}ms(avg)/${_pct(navBare, 0.9).toStringAsFixed(2)}ms(p90)');
+  });
+
+  testWidgets('长文懒构建 & 超大词汇表读取', (tester) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    const nParas = 300;
+    const wordsPerPara = 80;
+    final paras = [
+      for (var p = 0; p < nParas; p++) [for (var i = 0; i < wordsPerPara; i++) 'word${p}_$i'].join(' '),
+    ];
+    final blocks = [for (final t in paras) ArticleBlock(type: 'p', text: t)];
+    final id = await db.insertReturnId(
+      'INSERT OR REPLACE INTO articles (guid, title, sourceUrl, plainText, blocks, wordCount, capturedAt, cachedAt) '
+      'VALUES (?,?,?,?,?,?,?,?)',
+      ['zzbig_long', 'Long', 'https://x/', paras.join('\n\n'), jsonEncode(blocks.map((b) => b.toJson()).toList()), nParas * wordsPerPara, now, now],
+    );
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (var i = 0; i < 2000; i++) {
+        batch.insert(
+          'vocab_head',
+          {
+            'head': 'zzbig_$i',
+            'kind': 'word',
+            'firstSeen': i,
+            'lastSeen': 100000 - i,
+            'occCount': 1,
+            'fsrs_state': 0,
+            'fsrs_due': 0,
+            'fsrs_s': 0.0,
+            'fsrs_d': 0.0,
+            'zh': '释义',
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await batch.commit(noResult: true);
+    });
+
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
+
+    final sw = Stopwatch()..start();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [dbProvider.overrideWithValue(db)],
+      child: MaterialApp(theme: buildDarkTheme(), home: ArticleScreen(articleId: id)),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+    sw.stop();
+    final built = tester
+        .widgetList<RichText>(find.byType(RichText))
+        .where((w) => w.text.toPlainText().startsWith('\u2003\u2003'))
+        .length;
+    debugPrint('PERF long article first build=${sw.elapsedMilliseconds}ms builtPara=$built/$nParas');
+    expect(built, greaterThan(0), reason: '首屏至少应构建第一段');
+    expect(built, lessThan(nParas), reason: '300 段长文必须懒构建');
+
+    final vocab = VocabService(db, LlmService(HttpService(), AppConfigService()));
+    final sw2 = Stopwatch()..start();
+    final heads = await vocab.getHeads();
+    sw2.stop();
+    debugPrint('PERF getHeads 2000+ = ${sw2.elapsedMilliseconds}ms rows=${heads.length}');
+    expect(heads.length, greaterThanOrEqualTo(2000));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 5));
+    await db.execute("DELETE FROM articles WHERE guid = 'zzbig_long'");
+    await db.execute("DELETE FROM vocab_head WHERE head LIKE 'zzbig_%'");
   });
 }

@@ -39,11 +39,11 @@ const String _fullUpdateSql =
     'remoteFetchedAt = ?, cachedAt = ? WHERE id = ?';
 
 const String _cachedListSql =
-    "SELECT * FROM articles WHERE (cachedAt IS NOT NULL OR IFNULL(plainText,'') <> '') ORDER BY IFNULL(cachedAt, 0) DESC";
+    "SELECT a.* FROM articles a WHERE (a.cachedAt IS NOT NULL OR IFNULL(a.plainText,'') <> '') ORDER BY IFNULL(a.cachedAt, 0) DESC";
 
 const String _cachedListSourceSql =
-    "SELECT * FROM articles WHERE (cachedAt IS NOT NULL OR IFNULL(plainText,'') <> '') AND source = ? "
-    "ORDER BY IFNULL(cachedAt, 0) DESC";
+    "SELECT a.* FROM articles a WHERE (a.cachedAt IS NOT NULL OR IFNULL(a.plainText,'') <> '') AND a.source = ? "
+    "ORDER BY IFNULL(a.cachedAt, 0) DESC";
 
 const String _detailPath = '/v1/articles/42';
 
@@ -89,11 +89,11 @@ class _TestDb extends FakeDb {
           if ('${r['plainText'] ?? ''}'.trim().isNotEmpty) {'guid': r['guid']}
       ];
     }
-    if (sql.startsWith('SELECT * FROM articles')) {
+    if (sql.startsWith('SELECT * FROM articles') || sql.startsWith('SELECT a.* FROM articles')) {
       var rows = articles
           .where((r) => r['cachedAt'] != null || '${r['plainText'] ?? ''}'.trim().isNotEmpty)
           .toList();
-      if (params != null && params.isNotEmpty) {
+      if (params != null && params.isNotEmpty && sql.contains('a.source = ?')) {
         final source = params[0];
         rows = rows.where((r) => r['source'] == source).toList();
       }
@@ -283,6 +283,56 @@ void main() {
     expect(row['cachedAt'], isNull);
     expect(row['capturedAt'], isNull);
     expect(tr.calls, 0);
+  });
+
+  test('list() 把关键词与发布时间范围拼进 URL', () async {
+    final cfg = await _config();
+    final db = _TestDb();
+    final reqs = <http.Request>[];
+    final svc = RemoteArticleService(
+      db,
+      HttpService(client: MockClient((req) async {
+        reqs.add(req);
+        return _ok({'items': [], 'total': 0, 'page': 1, 'perPage': 20});
+      })),
+      cfg,
+      _UnusedTranslate(),
+    );
+
+    await svc.list(
+      q: 'solar power',
+      since: DateTime.fromMillisecondsSinceEpoch(1700000000000),
+      until: DateTime.fromMillisecondsSinceEpoch(1700086400000),
+    );
+
+    final url = reqs.single.url;
+    expect(url.queryParameters['q'], 'solar power');
+    expect(url.queryParameters['since'], '1700000000');
+    expect(url.queryParameters['until'], '1700086400');
+  });
+
+  test('cachedArticles 带关键词/时间时拼 LIKE 与范围条件（通配符转义）', () async {
+    final cfg = await _config();
+    final db = _TestDb();
+    final svc = RemoteArticleService(
+      db,
+      HttpService(client: MockClient((req) async => http.Response('no network', 500))),
+      cfg,
+      _UnusedTranslate(),
+    );
+
+    await svc.cachedArticles(
+      q: '100%',
+      since: DateTime.fromMillisecondsSinceEpoch(1000),
+      until: DateTime.fromMillisecondsSinceEpoch(2000),
+    );
+
+    final op = db.selected.last;
+    expect(op.sql, contains('LEFT JOIN title_zh'));
+    expect(op.sql, contains("a.title LIKE ? ESCAPE '\\' OR t.zh LIKE ? ESCAPE '\\'"));
+    expect(op.sql, contains('a.publishedAt >= ?'));
+    expect(op.sql, contains('a.publishedAt <= ?'));
+    expect(op.params, ['%100\\%%', '%100\\%%', 1000, 2000]);
   });
 
   test('list() 已有同 guid 行走 UPDATE，title 非空时才带 title = ?', () async {

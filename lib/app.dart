@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:toneup_read/services/app_config_service.dart';
 import 'package:toneup_read/theme/app_theme.dart';
 import 'package:toneup_read/widgets/go_ui.dart';
 import 'package:toneup_read/providers/providers.dart';
@@ -29,14 +30,19 @@ class _MyAppState extends ConsumerState<MyApp> {
 
   @override
   Widget build(BuildContext context) {
-    final dark = ref.watch(themeModeProvider);
+    final pref = ref.watch(themeModeProvider);
+    final mode = switch (pref) {
+      ThemePref.system => ThemeMode.system,
+      ThemePref.light => ThemeMode.light,
+      ThemePref.dark => ThemeMode.dark,
+    };
     final index = ref.watch(tabIndexProvider);
     return MaterialApp(
       title: '一潼上岸·阅读',
       debugShowCheckedModeBanner: false,
       theme: buildLightTheme(),
       darkTheme: buildDarkTheme(),
-      themeMode: dark ? ThemeMode.dark : ThemeMode.light,
+      themeMode: mode,
       // 更新观察者必须挂在 home 之下（Navigator 之内），弹更新面板才找得到 Navigator
       home: _UpdateReadyWatcher(
         child: Scaffold(

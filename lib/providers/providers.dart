@@ -32,18 +32,19 @@ final dictProvider = Provider((ref) => DictService(ref.watch(httpProvider), ref.
 /// 云端文章接口 + 本地缓存层（列表/详情/正文落库/标题中译批量）。
 final remoteArticleProvider =
     Provider((ref) => RemoteArticleService(ref.watch(dbProvider), ref.watch(httpProvider), ref.read(appConfigProvider), ref.watch(translateProvider)));
-final wordProvider = Provider((ref) => WordService(ref.watch(dbProvider), ref.watch(dictProvider), ref.watch(translateProvider)));
+final wordProvider = Provider(
+    (ref) => WordService(ref.watch(dbProvider), ref.watch(dictProvider), ref.watch(translateProvider)));
 
-class ThemeModeNotifier extends Notifier<bool> {
+class ThemeModeNotifier extends Notifier<ThemePref> {
   @override
-  bool build() => ref.read(appConfigProvider).darkMode;
-  void set(bool v) {
-    ref.read(appConfigProvider).setDarkMode(v);
+  ThemePref build() => ref.read(appConfigProvider).themePref;
+  void set(ThemePref v) {
+    ref.read(appConfigProvider).setThemePref(v);
     state = v;
   }
 }
 
-final themeModeProvider = NotifierProvider<ThemeModeNotifier, bool>(ThemeModeNotifier.new);
+final themeModeProvider = NotifierProvider<ThemeModeNotifier, ThemePref>(ThemeModeNotifier.new);
 
 /// 当前底部 Tab 索引（0 首页 / 1 词汇 / 2 句子 / 3 我的）。
 class TabIndexNotifier extends Notifier<int> {

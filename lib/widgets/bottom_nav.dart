@@ -21,6 +21,7 @@ class BottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final go = context.go;
     final bottom = MediaQuery.of(context).padding.bottom;
     // 必须显式给定高度：否则 Row 内的子项在不受限高度下会撑满整屏，
     // 导致 Scaffold 的 bottomNavigationBar 占满全高、body 被挤成 0（内容整体消失）。
@@ -32,9 +33,9 @@ class BottomNav extends StatelessWidget {
           child: Container(
             padding: EdgeInsets.only(left: Go.sp4, right: Go.sp4, top: Go.sp2, bottom: Go.sp2 + bottom),
             decoration: BoxDecoration(
-              color: Go.surfaceRaised.withValues(alpha: 0.9),
-              border: const Border(top: BorderSide(color: Go.outline, width: 0.5)),
-              boxShadow: Go.navShadow,
+              color: go.surfaceRaised.withValues(alpha: 0.9),
+              border: Border(top: BorderSide(color: go.outline, width: 0.5)),
+              boxShadow: go.navShadow,
             ),
             child: Row(
               children: [
@@ -43,7 +44,7 @@ class BottomNav extends StatelessWidget {
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => onTap(i),
-                      child: Center(child: _pill(_tabs[i].key, _tabs[i].text, currentIndex == i)),
+                      child: Center(child: _pill(context, _tabs[i].key, _tabs[i].text, currentIndex == i)),
                     ),
                   ),
               ],
@@ -54,19 +55,20 @@ class BottomNav extends StatelessWidget {
     );
   }
 
-  Widget _pill(String key, String text, bool on) {
+  Widget _pill(BuildContext context, String key, String text, bool on) {
+    final go = context.go;
     final pill = AnimatedContainer(
       duration: const Duration(milliseconds: 240),
       height: Go.r(64),
       padding: const EdgeInsets.symmetric(horizontal: Go.sp5),
       decoration: BoxDecoration(
-        color: on ? Go.primary95 : Colors.transparent,
+        color: on ? go.primary95 : Colors.transparent,
         borderRadius: BorderRadius.circular(Go.rFull),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          GoIcon(key, size: Go.r(40), color: on ? Go.primary : Go.onSurface3),
+          GoIcon(key, size: Go.r(40), color: on ? go.primary : go.onSurface3),
           const SizedBox(width: Go.sp2),
           Text(
             text,
@@ -74,12 +76,12 @@ class BottomNav extends StatelessWidget {
               fontSize: Go.fsMeta,
               height: 1.2,
               fontWeight: on ? FontWeight.w600 : FontWeight.w500,
-              color: on ? Go.primary : Go.onSurface3,
+              color: on ? go.primary : go.onSurface3,
             ),
           ),
         ],
       ),
     );
-    return on ? GoGlowPulse(color: Go.primary, child: pill) : pill;
+    return on ? GoGlowPulse(color: go.primary, child: pill) : pill;
   }
 }

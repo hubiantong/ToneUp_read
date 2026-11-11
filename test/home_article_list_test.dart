@@ -11,6 +11,8 @@ import 'package:toneup_read/services/http_service.dart';
 import 'package:toneup_read/services/llm_service.dart';
 import 'package:toneup_read/services/remote_article_service.dart';
 import 'package:toneup_read/services/translate_service.dart';
+import 'package:toneup_read/theme/app_theme.dart';
+import 'package:toneup_read/widgets/go_ui.dart';
 
 import 'fake_db.dart';
 
@@ -51,19 +53,32 @@ const _items = <Map<String, dynamic>>[
 /// 只回云端列表形状的假服务：`list` / `titleZhBatch` / `cachedGuids` 覆盖真实实现，
 /// 其余（落库 / 翻译 / 网络）在这些路径里根本不会被调到。
 class _FakeRemoteArticles extends RemoteArticleService {
-  _FakeRemoteArticles(DbService db, AppConfigService cfg)
-      : super(db, HttpService(), cfg, TranslateService(LlmService(HttpService(), cfg)));
+  _FakeRemoteArticles(DbService db, AppConfigService cfg, {List<Map<String, dynamic>>? items})
+      : _itemsOverride = items,
+        super(db, HttpService(), cfg, TranslateService(LlmService(HttpService(), cfg)));
 
+  final List<Map<String, dynamic>>? _itemsOverride;
   int listCalls = 0;
+  String? lastQ;
+  DateTime? lastSince;
+  DateTime? lastUntil;
+
+  List<Map<String, dynamic>> get _items => _itemsOverride ?? _itemsDefault;
 
   @override
   Future<Map<String, dynamic>> list({
     String? source,
     String status = 'accepted',
+    String? q,
+    DateTime? since,
+    DateTime? until,
     int page = 1,
     int perPage = 20,
   }) async {
     listCalls++;
+    lastQ = q;
+    lastSince = since;
+    lastUntil = until;
     return <String, dynamic>{
       'items': _items,
       'total': _items.length,
@@ -85,6 +100,8 @@ class _FakeRemoteArticles extends RemoteArticleService {
   Future<Set<String>> cachedGuids() async => <String>{};
 }
 
+const _itemsDefault = _items;
+
 Future<AppConfigService> _config() async {
   SharedPreferences.setMockInitialValues({
     'article_api_base': 'https://api.test',
@@ -102,7 +119,7 @@ Widget _app(_FakeRemoteArticles fake, AppConfigService cfg, {Widget? home}) {
       remoteArticleProvider.overrideWithValue(fake),
       appConfigProvider.overrideWith((ref) => cfg),
     ],
-    child: MaterialApp(home: home ?? const HomeScreen()),
+    child: MaterialApp(theme: buildDarkTheme(), home: home ?? const HomeScreen()),
   );
 }
 
@@ -187,5 +204,73 @@ void main() {
     expect(find.text(_zh1), findsOneWidget);
     expect(find.text(_en1), findsOneWidget);
     expect(find.text(_src1), findsNWidgets(2));
+  });
+
+  testWidgets('筛选：关键词与近 30 天只显示匹配项，并传给服务层', (tester) async {
+    final cfg = await _config();
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final fake = _FakeRemoteArticles(DbService(), cfg, items: [
+      {
+        'id': 1,
+        'title': 'Recent Solar Power',
+        'source': 'BBC',
+        'url': 'https://x.test/recent',
+        'published_at': nowSec - 86400,
+        'word_count': 100,
+      },
+      {
+        'id': 2,
+        'title': 'Old Climate Report',
+        'source': 'CNN',
+        'url': 'https://x.test/old',
+        'published_at': nowSec - 86400 * 100,
+        'word_count': 200,
+      },
+    ]);
+    await _pump(tester, _app(fake, cfg));
+    expect(find.text('Recent Solar Power'), findsOneWidget);
+    expect(find.text('Old Climate Report'), findsOneWidget);
+
+    final searchBtn = find.byWidgetPredicate((w) => w is GoIconBtn && w.icon == 'search');
+    expect(searchBtn, findsOneWidget);
+    await tester.tap(searchBtn);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('筛选文章'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'Solar');
+    await tester.pump();
+    await tester.tap(find.text('应用'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(fake.lastQ, 'Solar');
+    expect(find.text('Recent Solar Power'), findsOneWidget);
+    expect(find.text('Old Climate Report'), findsNothing);
+    expect(find.textContaining('关键词「Solar」'), findsOneWidget);
+
+    // 清除关键词，改按时间筛选。
+    await tester.tap(find.text('清除'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('Old Climate Report'), findsOneWidget);
+
+    await tester.tap(searchBtn);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(find.text('近 30 天'));
+    await tester.pump();
+    await tester.tap(find.text('应用'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(fake.lastSince, isNotNull);
+    expect(fake.lastUntil, isNotNull);
+    expect(find.text('Recent Solar Power'), findsOneWidget);
+    expect(find.text('Old Climate Report'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }

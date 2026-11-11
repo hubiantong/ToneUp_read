@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:toneup_read/models/models.dart';
 import 'package:toneup_read/providers/providers.dart';
 import 'package:toneup_read/screens/article_screen.dart';
+import 'package:toneup_read/theme/app_theme.dart';
 import 'package:toneup_read/theme/go_tokens.dart';
 
 import 'fake_db.dart';
@@ -76,7 +77,7 @@ void main() {
 
     await tester.pumpWidget(ProviderScope(
       overrides: [dbProvider.overrideWithValue(db)],
-      child: const MaterialApp(home: ArticleScreen(articleId: 1)),
+      child: MaterialApp(theme: buildDarkTheme(), home: const ArticleScreen(articleId: 1)),
     ));
     // 不用 pumpAndSettle：正文里的 Image.network 会挂起 HttpClient 超时定时器，
     // 且本页面渲染量大，settle 容易超时。这里只需要让首帧把正文查询跑完。
@@ -117,7 +118,7 @@ void main() {
 
     await tester.pumpWidget(ProviderScope(
       overrides: [dbProvider.overrideWithValue(_ArtDb())],
-      child: const MaterialApp(home: ArticleScreen(articleId: 1)),
+      child: MaterialApp(theme: buildDarkTheme(), home: const ArticleScreen(articleId: 1)),
     ));
 
     final sw = Stopwatch()..start();
@@ -127,11 +128,14 @@ void main() {
     // ignore: avoid_print
     print('RESULT build ${_paras * _wordsPerPara} words = ${sw.elapsedMilliseconds}ms');
 
-    expect(_paragraphs(tester).length, _paras);
+    // 懒构建：只构建视口附近的段落，不再一次性创建全部 20 段。
+    final built = _paragraphs(tester);
+    expect(built.length, greaterThan(0), reason: '首屏至少应构建第一段');
+    expect(built.length, lessThan(_paras), reason: '长文应懒构建，而不是一次性构建全部段落');
 
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
-    expect(tester.widget<Icon>(find.byIcon(Icons.menu)).color, Go.primary, reason: '选词模式应已开启');
+    expect(tester.widget<Icon>(find.byIcon(Icons.menu)).color, goDark.primary, reason: '选词模式应已开启');
 
     final first = _paragraphs(tester).first;
 

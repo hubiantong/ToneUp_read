@@ -69,12 +69,12 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   final Set<int> _sel = <int>{};
   final ValueNotifier<int> _selVer = ValueNotifier<int>(0);
 
-  /// 分词与字符偏移表缓存：旧实现在 build 里逐段重新分词，改为按 blocks 身份缓存。
+  /// 分词与字符偏移表缓存：按段落懒计算，只处理实际构建/选中的段落。
   List<ArticleBlock>? _tokBlocks;
-  List<ArticleBlock>? _tokCurated;
-  bool _tokUseCurated = false;
-  List<List<_Tok>> _paraToks = const [];
-  List<List<int>> _paraStarts = const [];
+  List<List<_Tok>?> _paraToks = [];
+  List<List<int>?> _paraStarts = [];
+  List<String> _paraTexts = [];
+  List<int> _paraOfBlock = [];
 
   bool _ttsPlaying = false;
   bool _ttsSynthesizing = false;
@@ -88,8 +88,10 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
 
   List<ArticleBlock> get _activeBlocks => (_useCurated && _curatedBlocks != null) ? _curatedBlocks! : _blocks;
 
-  List<String> get _paragraphs =>
-      _activeBlocks.where((b) => b.type == 'p').map((b) => b.text ?? '').toList();
+  List<String> get _paragraphs {
+    _ensureTokenCache();
+    return _paraTexts;
+  }
 
   late final TtsService _tts;
 
@@ -147,7 +149,13 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     } catch (e) {
       _error = errText(e);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+        // 阅读器（SliverList）构建完成后再定位，避免 _scrollCtrl 还没有 clients。
+        if (widget.focusPara >= 0) {
+          WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToPara(widget.focusPara));
+        }
+      }
     }
   }
 
@@ -182,13 +190,38 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     _error = '';
     _flashPara = widget.focusPara;
     _flashTok = widget.focusTok;
-    if (widget.focusPara >= 0) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final ctx = _paraKeys[widget.focusPara]?.currentContext;
-        if (ctx != null) {
-          Scrollable.ensureVisible(ctx, alignment: 0.15, duration: const Duration(milliseconds: 320), curve: Curves.easeOut);
-        }
-      });
+  }
+
+  /// 从词汇页「回到原文」：SliverList 是懒构建的，先按段落字数比例估算位置，
+  /// 再在后续帧里用目标段落的 GlobalKey 做 ensureVisible 微调。
+  Future<void> _jumpToPara(int pi) async {
+    if (!mounted || !_scrollCtrl.hasClients) return;
+    _ensureTokenCache();
+    if (pi < 0 || pi >= _paraTexts.length) return;
+    final total = _paraTexts.fold<int>(0, (s, t) => s + t.length);
+    if (total <= 0) return;
+    final before = _paraTexts.take(pi).fold<int>(0, (s, t) => s + t.length);
+    final max = _scrollCtrl.position.maxScrollExtent;
+    if (!max.isFinite || max <= 0) return;
+    _scrollCtrl.jumpTo((max * before / total).clamp(0.0, max));
+    for (var attempt = 0; attempt < 3; attempt++) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      final ctx = _paraKeys[pi]?.currentContext;
+      if (ctx != null) {
+        await Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.12,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+        return;
+      }
+      // 估算可能偏前或偏后：第一次向后小步、第二次向前回退，让目标段进入懒构建窗口。
+      if (attempt < 2 && _scrollCtrl.hasClients) {
+        final delta = attempt == 0 ? 320.0 : -640.0;
+        _scrollCtrl.jumpTo((_scrollCtrl.offset + delta).clamp(0.0, _scrollCtrl.position.maxScrollExtent));
+      }
     }
   }
 
@@ -266,7 +299,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     for (final k in keys) {
       final pi = k >> 20;
       final ti = k & 0xFFFFF;
-      final toks = pi < _paraToks.length ? _paraToks[pi] : const <_Tok>[];
+      final toks = _toksFor(pi);
       if (ti < toks.length) out.add(toks[ti].text);
     }
     return out.join(' ').trim();
@@ -296,17 +329,45 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     }
   }
 
-  void _syncToks() {
-    final blocks = _blocks;
-    final curated = _curatedBlocks;
-    final use = _useCurated;
-    if (identical(_tokBlocks, blocks) && identical(_tokCurated, curated) && _tokUseCurated == use) return;
+  /// 按当前 blocks 重置分词缓存（段落文本与 block→paragraph 映射）。
+  /// 只在正文块身份变化时执行；具体分词交给 [_toksFor] 懒计算。
+  void _ensureTokenCache() {
+    final blocks = _activeBlocks;
+    if (identical(_tokBlocks, blocks)) return;
     _tokBlocks = blocks;
-    _tokCurated = curated;
-    _tokUseCurated = use;
-    final paras = _paragraphs;
-    _paraToks = [for (final p in paras) _tokenize(p)];
-    _paraStarts = [for (final t in _paraToks) _tokenOffsets(t)];
+    final texts = <String>[];
+    final index = <int>[];
+    var pi = -1;
+    for (final b in blocks) {
+      if (b.type == 'p') {
+        pi++;
+        texts.add(b.text ?? '');
+        index.add(pi);
+      } else {
+        index.add(-1);
+      }
+    }
+    _paraTexts = texts;
+    _paraOfBlock = index;
+    _paraToks = List<List<_Tok>?>.filled(texts.length, null);
+    _paraStarts = List<List<int>?>.filled(texts.length, null);
+  }
+
+  List<_Tok> _toksFor(int pi) {
+    _ensureTokenCache();
+    if (pi < 0 || pi >= _paraTexts.length) return const [];
+    final cached = _paraToks[pi];
+    if (cached != null) return cached;
+    final toks = _tokenize(_paraTexts[pi]);
+    _paraToks[pi] = toks;
+    _paraStarts[pi] = _tokenOffsets(toks);
+    return toks;
+  }
+
+  List<int> _startsFor(int pi) {
+    _toksFor(pi);
+    if (pi < 0 || pi >= _paraStarts.length) return const [];
+    return _paraStarts[pi] ?? const [];
   }
 
   /// 各 token 在整段文本中的起始字符偏移（含 2 字符首行缩进），供二分查找定位。
@@ -468,7 +529,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
                 padding: const EdgeInsets.fromLTRB(Go.sp5, Go.sp4, Go.sp5, Go.sp2),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text(_curateSummary(_blocks, _curatedBlocks!), style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+                  child: Text(_curateSummary(_blocks, _curatedBlocks!), style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
                 ),
               ),
             ListTile(title: Text(_useCurated ? '切换到原文' : '切换到 AI 精选版'), onTap: () => Navigator.pop(c, 0)),
@@ -588,9 +649,9 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp2),
                   padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp3),
-                  decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
-                  child: const Text('点选多个单词组成选区，点「查询」出词卡 · 点「翻译」看译文 · 再次点词取消选中',
-                      textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface2, height: Go.lhSnug)),
+                  decoration: BoxDecoration(color: context.go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
+                  child: Text('点选多个单词组成选区，点「查询」出词卡 · 点「翻译」看译文 · 再次点词取消选中',
+                      textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface2, height: Go.lhSnug)),
                 ),
               if (_showSettings) _settings(cfg),
               Expanded(child: _body()),
@@ -618,33 +679,33 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
             _sel.clear();
             _selVer.value++;
           }
-        }), color: _selectMode ? Go.primary : null),
-        GoIconBtn(icon: _ttsPlaying ? 'stop' : 'tts', onTap: _toggleReadAloud, color: _ttsPlaying ? Go.primary : null),
-        GoIconBtn(icon: 'sparkle', onTap: _onCurateTap, color: _useCurated ? Go.primary : null),
-        GoIconBtn(icon: 'settings', onTap: () => setState(() => _showSettings = !_showSettings), color: _showSettings ? Go.primary : null),
+        }), color: _selectMode ? context.go.primary : null),
+        GoIconBtn(icon: _ttsPlaying ? 'stop' : 'tts', onTap: _toggleReadAloud, color: _ttsPlaying ? context.go.primary : null),
+        GoIconBtn(icon: 'sparkle', onTap: _onCurateTap, color: _useCurated ? context.go.primary : null),
+        GoIconBtn(icon: 'settings', onTap: () => setState(() => _showSettings = !_showSettings), color: _showSettings ? context.go.primary : null),
       ],
     );
   }
 
   Widget _settings(dynamic cfg) {
     return Container(
-      decoration: const BoxDecoration(color: Go.surfaceRaised, border: Border(bottom: BorderSide(color: Go.outline, width: 0.5))),
+      decoration: BoxDecoration(color: context.go.surfaceRaised, border: Border(bottom: BorderSide(color: context.go.outline, width: 0.5))),
       padding: const EdgeInsets.symmetric(vertical: Go.sp2),
       child: Column(
         children: [
           _setRow('字号', Row(mainAxisSize: MainAxisSize.min, children: [
             _step('A−', () => _changeFont(-1)),
-            SizedBox(width: Go.r(80), child: Text('${cfg.fontSize.toStringAsFixed(0)}', textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3))),
+            SizedBox(width: Go.r(80), child: Text('${cfg.fontSize.toStringAsFixed(0)}', textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface3))),
             _step('A＋', () => _changeFont(1)),
           ])),
           _setRow('行距', Row(mainAxisSize: MainAxisSize.min, children: [
             _step('−', () => _changeLine(-0.1)),
-            SizedBox(width: Go.r(80), child: Text(cfg.lineHeight.toStringAsFixed(1), textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3))),
+            SizedBox(width: Go.r(80), child: Text(cfg.lineHeight.toStringAsFixed(1), textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface3))),
             _step('＋', () => _changeLine(0.1)),
           ])),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp4),
-            child: Align(alignment: Alignment.centerLeft, child: Text('单击查词 · 长按整句 · 工具栏「选择」可点选多词查询或翻译 · 朗读按钮可播放全文', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp4),
+            child: Align(alignment: Alignment.centerLeft, child: Text('单击查词 · 长按整句 · 工具栏「选择」可点选多词查询或翻译 · 朗读按钮可播放全文', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3))),
           ),
         ],
       ),
@@ -654,10 +715,10 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   Widget _setRow(String label, Widget child) => Container(
         margin: const EdgeInsets.symmetric(horizontal: Go.sp6),
         padding: const EdgeInsets.symmetric(vertical: Go.sp4),
-        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Go.outline, width: 0.5))),
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: context.go.outline, width: 0.5))),
         child: Row(
           children: [
-            SizedBox(width: Go.r(96), child: Text(label, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface))),
+            SizedBox(width: Go.r(96), child: Text(label, style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface))),
             const Spacer(),
             child,
           ],
@@ -671,8 +732,8 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
           height: Go.r(64),
           padding: const EdgeInsets.symmetric(horizontal: Go.sp2),
           alignment: Alignment.center,
-          decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
-          child: Text(label, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface)),
+          decoration: BoxDecoration(color: context.go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text(label, style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface)),
         ),
       );
 
@@ -690,14 +751,14 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
 
   Widget _body() {
     if (_loading) {
-      return const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [PolySpinner(), SizedBox(height: Go.sp6), Text('正文加载中…', style: TextStyle(color: Go.onSurface3, fontSize: Go.fsBodySm))]));
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [const PolySpinner(), const SizedBox(height: Go.sp6), Text('正文加载中…', style: TextStyle(color: context.go.onSurface3, fontSize: Go.fsBodySm))]));
     }
     if (_error.isNotEmpty) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(_error, style: const TextStyle(color: Go.danger)),
+          Text(_error, style: TextStyle(color: context.go.danger)),
           const SizedBox(height: Go.sp3),
-          GestureDetector(onTap: _load, child: const Text('重试', style: TextStyle(color: Go.primary, fontWeight: FontWeight.w600))),
+          GestureDetector(onTap: _load, child: Text('重试', style: TextStyle(color: context.go.primary, fontWeight: FontWeight.w600))),
         ]),
       );
     }
@@ -717,22 +778,22 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
           Container(
             margin: const EdgeInsets.symmetric(horizontal: Go.sp6),
             padding: const EdgeInsets.all(Go.sp6),
-            decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
+            decoration: BoxDecoration(color: context.go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('正文未缓存', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w600, color: Go.onSurface)),
+                Text('正文未缓存', style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w600, color: context.go.onSurface)),
                 const SizedBox(height: Go.sp2),
-                const Text('这篇文章暂时没有缓存正文，可以打开原文阅读，或稍后重新进入本页加载。',
-                    style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3, height: Go.lhRelaxed)),
+                Text('这篇文章暂时没有缓存正文，可以打开原文阅读，或稍后重新进入本页加载。',
+                    style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface3, height: Go.lhRelaxed)),
                 if (_sourceUrl.isNotEmpty) ...[
                   const SizedBox(height: Go.sp5),
                   GestureDetector(
                     onTap: _openOriginal,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp3),
-                      decoration: BoxDecoration(color: Go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
-                      child: const Text('打开原文', style: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w600, color: Go.onPrimary)),
+                      decoration: BoxDecoration(color: context.go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
+                      child: Text('打开原文', style: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w600, color: context.go.onPrimary)),
                     ),
                   ),
                 ],
@@ -762,35 +823,38 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
 
   Widget _reader() {
     final cfg = ref.watch(appConfigProvider);
+    _ensureTokenCache();
     final blocks = _activeBlocks;
-    var paraIndex = -1;
-    final widgets = <Widget>[];
-    for (var bi = 0; bi < blocks.length; bi++) {
-      final b = blocks[bi];
-      if (b.type == 'p') {
-        paraIndex++;
-        widgets.add(_paragraph(b.text ?? '', paraIndex));
-      } else if (b.type == 'img' && !_imgErr.contains(bi)) {
-        widgets.add(_imageBlock(b, bi));
-      }
-    }
-    return SingleChildScrollView(
-      controller: _scrollCtrl,
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + Go.sp8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _cover(),
-          Padding(
+    return DefaultTextStyle(
+      style: TextStyle(fontSize: cfg.fontSize, height: cfg.lineHeight, color: context.go.onSurface),
+      child: CustomScrollView(
+        controller: _scrollCtrl,
+        slivers: [
+          SliverToBoxAdapter(child: _cover()),
+          SliverPadding(
             padding: const EdgeInsets.symmetric(horizontal: Go.sp6),
-            child: DefaultTextStyle(
-              style: TextStyle(fontSize: cfg.fontSize, height: cfg.lineHeight, color: Go.onSurface),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: widgets),
+            sliver: SliverList.builder(
+              itemCount: blocks.length,
+              itemBuilder: (context, bi) {
+                final b = blocks[bi];
+                if (b.type == 'p') {
+                  final pi = bi < _paraOfBlock.length ? _paraOfBlock[bi] : -1;
+                  if (pi < 0) return const SizedBox.shrink();
+                  return _paragraph(b.text ?? '', pi);
+                }
+                if (b.type == 'img' && !_imgErr.contains(bi)) return _imageBlock(b, bi);
+                return const SizedBox.shrink();
+              },
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: Go.sp12),
-            child: Text('— 全文完 —', textAlign: TextAlign.center, style: TextStyle(color: Go.onSurface3, fontSize: Go.fsMeta, letterSpacing: 1)),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.only(
+                top: Go.sp12,
+                bottom: MediaQuery.of(context).padding.bottom + Go.sp8,
+              ),
+              child: Text('— 全文完 —', textAlign: TextAlign.center, style: TextStyle(color: context.go.onSurface3, fontSize: Go.fsMeta, letterSpacing: 1)),
+            ),
           ),
         ],
       ),
@@ -798,9 +862,8 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   }
 
   Widget _paragraph(String text, int pi) {
-    _syncToks();
-    final toks = pi < _paraToks.length ? _paraToks[pi] : const <_Tok>[];
-    final starts = pi < _paraStarts.length ? _paraStarts[pi] : const <int>[];
+    final toks = _toksFor(pi);
+    final starts = _startsFor(pi);
     return Container(
       key: _paraKeys.putIfAbsent(pi, () => GlobalKey()),
       margin: const EdgeInsets.only(bottom: Go.sp5),
@@ -847,7 +910,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
           if (_sourceHost.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: Go.sp4),
-              child: Text(_sourceHost.toUpperCase(), style: const TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, letterSpacing: 0.6, color: Go.primary)),
+              child: Text(_sourceHost.toUpperCase(), style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, letterSpacing: 0.6, color: context.go.primary)),
             ),
           Wrap(
             children: [
@@ -856,9 +919,9 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
                     ? GestureDetector(
                         onTap: () => _onTok(toks[ti], false, _title, -1, ti, isTitle: true),
                         onLongPress: () => _onTok(toks[ti], true, _title, -1, ti, isTitle: true),
-                        child: Text(toks[ti].text, style: const TextStyle(fontFamily: Go.fontRead, fontWeight: FontWeight.w700, fontSize: Go.fsDisplay, height: Go.lhTight, color: Go.onSurface)),
+                        child: Text(toks[ti].text, style: TextStyle(fontFamily: Go.fontRead, fontWeight: FontWeight.w700, fontSize: Go.fsDisplay, height: Go.lhTight, color: context.go.onSurface)),
                       )
-                    : Text(toks[ti].text, style: const TextStyle(fontFamily: Go.fontRead, fontWeight: FontWeight.w700, fontSize: Go.fsDisplay, height: Go.lhTight, color: Go.onSurface)),
+                    : Text(toks[ti].text, style: TextStyle(fontFamily: Go.fontRead, fontWeight: FontWeight.w700, fontSize: Go.fsDisplay, height: Go.lhTight, color: context.go.onSurface)),
             ],
           ),
           const SizedBox(height: Go.sp3),
@@ -867,20 +930,20 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
             runSpacing: Go.sp2,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Text(_dateText, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+              Text(_dateText, style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
               if (_readMins > 0)
-                Text('· $_readMins 分钟阅读', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+                Text('· $_readMins 分钟阅读', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
               if (_status == 'gone')
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                  decoration: BoxDecoration(color: Go.danger.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(Go.rFull)),
-                  child: const Text('源已下线，显示本地缓存', style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: Go.danger)),
+                  decoration: BoxDecoration(color: context.go.danger.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(Go.rFull)),
+                  child: Text('源已下线，显示本地缓存', style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: context.go.danger)),
                 ),
               if (_useCurated)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                  decoration: BoxDecoration(color: Go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
-                  child: const Text('AI 精选版', style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: Go.primary)),
+                  decoration: BoxDecoration(color: context.go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
+                  child: Text('AI 精选版', style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: context.go.primary)),
                 ),
             ],
           ),
@@ -892,7 +955,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   Widget _imageBlock(ArticleBlock b, int bi) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: Go.sp5),
-      decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
+      decoration: BoxDecoration(color: context.go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -908,7 +971,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
           if (b.alt != null && b.alt!.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(Go.sp3, Go.sp2, Go.sp3, Go.sp3),
-              child: Text(b.alt!, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, height: 1.4)),
+              child: Text(b.alt!, style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3, height: 1.4)),
             ),
         ],
       ),
@@ -995,7 +1058,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       bottom: MediaQuery.of(context).padding.bottom + Go.sp4,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp3),
-        decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.shadow3),
+        decoration: BoxDecoration(color: context.go.surface2, borderRadius: BorderRadius.circular(Go.rLg), boxShadow: context.go.shadow3),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1003,7 +1066,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
             Text(preview,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white, fontSize: Go.fsBodySm, height: Go.lhSnug)),
+                style: TextStyle(color: context.go.onSurface, fontSize: Go.fsBodySm, height: Go.lhSnug)),
             const SizedBox(height: Go.sp3),
             // Wrap 而非 Row：系统字号放大时按钮换行，不会横向溢出（textScaler 回归铁律）。
             Wrap(
@@ -1015,7 +1078,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
                 _selBtn('查询', onTap: _querySelection),
                 _selBtn('翻译', onTap: _translateSelection),
                 _selBtn('收藏', onTap: _saveSentence),
-                GestureDetector(onTap: _clearSelection, child: const Text('取消', style: TextStyle(color: Color(0xBFFFFFFF), fontSize: Go.fsBodySm))),
+                GestureDetector(onTap: _clearSelection, child: Text('取消', style: TextStyle(color: context.go.onSurface2, fontSize: Go.fsBodySm))),
               ],
             ),
           ],
@@ -1028,8 +1091,8 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp2),
-          decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(Go.rFull)),
-          child: Text(label, style: const TextStyle(color: Colors.white, fontSize: Go.fsBodySm)),
+          decoration: BoxDecoration(color: context.go.primary.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text(label, style: TextStyle(color: context.go.primary, fontSize: Go.fsBodySm)),
         ),
       );
 
@@ -1043,17 +1106,17 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         });
       },
       child: Container(
-        color: Colors.black.withValues(alpha: 0.32),
+        color: context.go.scrim,
         alignment: Alignment.center,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: Go.sp10, vertical: Go.sp8),
-          decoration: BoxDecoration(color: Go.surface, borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.elev2),
+          decoration: BoxDecoration(color: context.go.surface, borderRadius: BorderRadius.circular(Go.rLg), boxShadow: context.go.elev2),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               const PolySpinner(),
               const SizedBox(height: Go.sp4),
-              const Text('正在朗读…', style: TextStyle(fontSize: Go.fsBody, color: Go.onSurface)),
+              Text('正在朗读…', style: TextStyle(fontSize: Go.fsBody, color: context.go.onSurface)),
               const SizedBox(height: Go.sp4),
               GestureDetector(
                 onTap: () async {
@@ -1065,8 +1128,8 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
                 },
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp2),
-                  decoration: BoxDecoration(border: Border.all(color: Go.primary), borderRadius: BorderRadius.circular(Go.rFull)),
-                  child: const Text('取消', style: TextStyle(fontSize: Go.fsBodySm, color: Go.primary)),
+                  decoration: BoxDecoration(border: Border.all(color: context.go.primary), borderRadius: BorderRadius.circular(Go.rFull)),
+                  child: Text('取消', style: TextStyle(fontSize: Go.fsBodySm, color: context.go.primary)),
                 ),
               ),
             ],
@@ -1209,9 +1272,9 @@ class _ParaTextState extends State<_ParaText> {
     final flash = widget.flashTok == ti;
     final selStyle = (selected || flash)
         ? TextStyle(
-            backgroundColor: Go.selWord,
+            backgroundColor: context.go.selWord,
             fontWeight: selected ? FontWeight.w600 : null,
-            color: flash ? Go.primary : null,
+            color: flash ? context.go.primary : null,
           )
         : null;
     if (!tk.word) return TextSpan(text: tk.text, style: selStyle);
@@ -1302,6 +1365,27 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
 
   bool get _isPhrase => _q.trim().contains(_reSpace);
 
+  /// 当前词卡的中文释义（dict 首义项 → zh → 纯文本），用于回写 vocab_head.zh。
+  String get _headZh {
+    final c = _card;
+    if (c != null) {
+      final senses = c['senses'];
+      if (senses is List && senses.isNotEmpty && senses.first is Map) {
+        final d = '${(senses.first as Map)['definition'] ?? ''}'.trim();
+        if (d.isNotEmpty) return d;
+      }
+      final z = '${c['zh'] ?? ''}'.trim();
+      if (z.isNotEmpty) return z;
+    }
+    return _text.trim();
+  }
+
+  void _saveHeadZh() {
+    final zh = _headZh;
+    if (zh.isEmpty) return;
+    ref.read(vocabProvider).updateHeadZh(_q, zh).catchError((_) {});
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1325,6 +1409,7 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
           setState(() => _error = '未获取到释义，请重试');
         } else {
           setState(() => _text = r.trim());
+          _saveHeadZh();
         }
       } else {
         final raw = await ref.read(wordProvider).lookup(_q, mode: _mode);
@@ -1334,6 +1419,7 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
           setState(() => _error = '未获取到释义，请重试');
         } else {
           _applyResult(raw);
+          _saveHeadZh();
         }
       }
     } catch (e) {
@@ -1377,6 +1463,7 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
     try {
       await ref.read(vocabProvider).recordOccurrence(
           _q, widget.sentence, widget.articleGuid, widget.articleTitle, widget.sourceLabel, widget.paraIndex, widget.tokIndex);
+      _saveHeadZh();
       ref.read(vocabRevisionProvider.notifier).bump();
       if (!mounted) return;
       setState(() => _added = true);
@@ -1399,7 +1486,7 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
   Widget build(BuildContext context) {
     return Container(
       height: MediaQuery.of(context).size.height * 0.66,
-      decoration: const BoxDecoration(color: Go.surfaceRaised, borderRadius: BorderRadius.vertical(top: Radius.circular(Go.rXl))),
+      decoration: BoxDecoration(color: context.go.surfaceRaised, borderRadius: const BorderRadius.vertical(top: Radius.circular(Go.rXl))),
       child: Column(
         children: [
           Padding(
@@ -1407,7 +1494,7 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
             child: Row(
               children: [
                 Flexible(
-                  child: Text(_q, style: const TextStyle(fontSize: Go.fsH1, fontWeight: FontWeight.w600, color: Go.onSurface)),
+                  child: Text(_q, style: TextStyle(fontSize: Go.fsH1, fontWeight: FontWeight.w600, color: context.go.onSurface)),
                 ),
                 if (_isPhrase) ...[
                   const SizedBox(width: Go.sp2),
@@ -1430,11 +1517,11 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
                   }),
                 ],
                 const SizedBox(width: Go.sp2),
-                GestureDetector(onTap: widget.onClose, child: const Text('×', style: TextStyle(fontSize: 24, color: Go.onSurface3))),
+                GestureDetector(onTap: widget.onClose, child: Text('×', style: TextStyle(fontSize: 24, color: context.go.onSurface3))),
               ],
             ),
           ),
-          const Divider(height: 0.5, thickness: 0.5, color: Go.outline),
+          Divider(height: 0.5, thickness: 0.5, color: context.go.outline),
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(Go.sp6),
@@ -1442,7 +1529,7 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
             ),
           ),
           if (_error.isEmpty) ...[
-            const Divider(height: 0.5, thickness: 0.5, color: Go.outline),
+            Divider(height: 0.5, thickness: 0.5, color: context.go.outline),
             _addBar(),
           ],
         ],
@@ -1453,14 +1540,14 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
   // ================= 渲染 =================
   Widget _content() {
     if (_loading) {
-      return const Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [PolySpinner(), SizedBox(height: Go.sp3), Text('查询中…', style: TextStyle(color: Go.onSurface3))]));
+      return Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [const PolySpinner(), const SizedBox(height: Go.sp3), Text('查询中…', style: TextStyle(color: context.go.onSurface3))]));
     }
     if (_error.isNotEmpty) {
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(_error, style: const TextStyle(color: Go.danger, fontSize: Go.fsBodySm)),
+        Text(_error, style: TextStyle(color: context.go.danger, fontSize: Go.fsBodySm)),
         const SizedBox(height: Go.sp3),
-        GestureDetector(onTap: _lookup, child: const Text('重试', style: TextStyle(color: Go.primary, fontWeight: FontWeight.w600))),
+        GestureDetector(onTap: _lookup, child: Text('重试', style: TextStyle(color: context.go.primary, fontWeight: FontWeight.w600))),
       ]);
     }
     final card = _card;
@@ -1471,7 +1558,7 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
         _sectionTitle('AI 释义'),
         const SizedBox(height: Go.sp2),
       ],
-      Text(_text, style: const TextStyle(fontSize: Go.fsBody, height: Go.lhRelaxed, color: Go.onSurface)),
+      Text(_text, style: TextStyle(fontSize: Go.fsBody, height: Go.lhRelaxed, color: context.go.onSurface)),
     ]);
   }
 
@@ -1491,14 +1578,14 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
       children: [
         Row(children: [
           if (phonetic.isNotEmpty)
-            Text('/$phonetic/', style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3, height: Go.lhNormal)),
+            Text('/$phonetic/', style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface3, height: Go.lhNormal)),
           const SizedBox(width: Go.sp3),
           GestureDetector(
             onTap: () => widget.onSpeak(_q),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: Go.sp1),
-              decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
-              child: const Text('发音', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface)),
+              decoration: BoxDecoration(color: context.go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
+              child: Text('发音', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface)),
             ),
           ),
         ]),
@@ -1510,13 +1597,13 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
         ] else if (zh.isNotEmpty) ...[
           _sectionTitle(_mode == 'en2en' ? '英文释义' : '中文释义'),
           const SizedBox(height: Go.sp3),
-          Text(zh, style: TextStyle(fontSize: Go.fsBody, height: Go.lhRelaxed, color: _mode == 'en2en' ? Go.onSurface2 : Go.onSurface)),
+          Text(zh, style: TextStyle(fontSize: Go.fsBody, height: Go.lhRelaxed, color: _mode == 'en2en' ? context.go.onSurface2 : context.go.onSurface)),
         ],
         if (senses.isNotEmpty || zh.isNotEmpty) const SizedBox(height: Go.sp5),
         if (ex.isNotEmpty) ...[
           _sectionTitle('词形'),
           const SizedBox(height: Go.sp2),
-          Text(ex, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface2, height: Go.lhNormal)),
+          Text(ex, style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface2, height: Go.lhNormal)),
           const SizedBox(height: Go.sp5),
         ],
         if (tags.isNotEmpty) ...[
@@ -1524,7 +1611,7 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
           const SizedBox(height: Go.sp5),
         ],
         if (meta.isNotEmpty) ...[
-          Text(meta, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, height: Go.lhNormal)),
+          Text(meta, style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3, height: Go.lhNormal)),
           const SizedBox(height: Go.sp5),
         ],
         if (!found) ...[
@@ -1549,15 +1636,15 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (pos.isNotEmpty) ...[
-            Text('$pos.', style: const TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: Go.primary, height: Go.lhNormal)),
+            Text('$pos.', style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: context.go.primary, height: Go.lhNormal)),
             const SizedBox(width: Go.sp2),
           ],
-          Expanded(child: Text(main, style: const TextStyle(fontSize: Go.fsBody, height: Go.lhNormal, color: Go.onSurface))),
+          Expanded(child: Text(main, style: TextStyle(fontSize: Go.fsBody, height: Go.lhNormal, color: context.go.onSurface))),
         ]),
         if (sub.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: Go.sp1),
-            child: Text(sub, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, height: Go.lhNormal)),
+            child: Text(sub, style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3, height: Go.lhNormal)),
           ),
       ]),
     );
@@ -1574,12 +1661,12 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
       child: Container(
         margin: const EdgeInsets.only(bottom: Go.sp2),
         padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp3),
-        decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
+        decoration: BoxDecoration(color: context.go.surface2, borderRadius: BorderRadius.circular(Go.rMd)),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(child: Text(ph.isEmpty ? w : '$w  $ph', style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface, height: Go.lhNormal))),
+          Expanded(child: Text(ph.isEmpty ? w : '$w  $ph', style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface, height: Go.lhNormal))),
           if (tr.isNotEmpty)
             Expanded(
-              child: Text(tr, textAlign: TextAlign.right, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, height: Go.lhNormal)),
+              child: Text(tr, textAlign: TextAlign.right, style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3, height: Go.lhNormal)),
             ),
         ]),
       ),
@@ -1656,12 +1743,12 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
   }
 
   Widget _sectionTitle(String t) =>
-      Text(t, style: const TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: Go.onSurface3, letterSpacing: 0.4));
+      Text(t, style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: context.go.onSurface3, letterSpacing: 0.4));
 
   Widget _badge(String label) => Container(
         padding: const EdgeInsets.symmetric(horizontal: Go.sp2, vertical: 1),
-        decoration: BoxDecoration(color: Go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
-        child: Text(label, style: const TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: Go.primary)),
+        decoration: BoxDecoration(color: context.go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
+        child: Text(label, style: TextStyle(fontSize: Go.fsCap, fontWeight: FontWeight.w600, color: context.go.primary)),
       );
 
   /// 底部主按钮：加入生词库 → 已收录。
@@ -1674,9 +1761,9 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: Go.sp4),
           alignment: Alignment.center,
-          decoration: BoxDecoration(color: _added ? Go.surface2 : Go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
+          decoration: BoxDecoration(color: _added ? context.go.surface2 : context.go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
           child: Text(_added ? '已收录' : '加入生词库',
-              style: TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: _added ? Go.onSurface3 : Go.onPrimary)),
+              style: TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: _added ? context.go.onSurface3 : context.go.onPrimary)),
         ),
       ),
     );
@@ -1686,8 +1773,8 @@ class _WordCardDialogState extends ConsumerState<_WordCardDialog> {
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: Go.sp1),
-          decoration: BoxDecoration(color: on ? Go.primary : Colors.transparent, borderRadius: BorderRadius.circular(Go.rFull)),
-          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: on ? Go.onPrimary : Go.onSurface3)),
+          decoration: BoxDecoration(color: on ? context.go.primary : Colors.transparent, borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: on ? context.go.onPrimary : context.go.onSurface3)),
         ),
       );
 }
@@ -1737,39 +1824,39 @@ class _TranslateSheetState extends ConsumerState<_TranslateSheet> {
   Widget build(BuildContext context) {
     return Container(
       height: MediaQuery.of(context).size.height * 0.45,
-      decoration: const BoxDecoration(color: Go.surfaceRaised, borderRadius: BorderRadius.vertical(top: Radius.circular(Go.rXl))),
+      decoration: BoxDecoration(color: context.go.surfaceRaised, borderRadius: const BorderRadius.vertical(top: Radius.circular(Go.rXl))),
       child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp5, Go.sp6, Go.sp3),
             child: Row(
               children: [
-                const Expanded(
-                    child: Text('翻译', style: TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w600, color: Go.onSurface))),
+                Expanded(
+                    child: Text('翻译', style: TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w600, color: context.go.onSurface))),
                 if (_out.isNotEmpty)
                   _sheetBtn('复制', () async {
                     await Clipboard.setData(ClipboardData(text: _out));
                     if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已复制译文')));
                   }),
                 const SizedBox(width: Go.sp3),
-                GestureDetector(onTap: widget.onClose, child: const Text('×', style: TextStyle(fontSize: 24, color: Go.onSurface3))),
+                GestureDetector(onTap: widget.onClose, child: Text('×', style: TextStyle(fontSize: 24, color: context.go.onSurface3))),
               ],
             ),
           ),
-          const Divider(height: 0.5, thickness: 0.5, color: Go.outline),
+          Divider(height: 0.5, thickness: 0.5, color: context.go.outline),
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(Go.sp6),
               child: _loading
-                  ? const Center(
-                      child: Column(mainAxisSize: MainAxisSize.min, children: [PolySpinner(), SizedBox(height: Go.sp3), Text('翻译中…', style: TextStyle(color: Go.onSurface3))]))
+                  ? Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [const PolySpinner(), const SizedBox(height: Go.sp3), Text('翻译中…', style: TextStyle(color: context.go.onSurface3))]))
                   : _error.isNotEmpty
                       ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(_error, style: const TextStyle(color: Go.danger, fontSize: Go.fsBodySm)),
+                          Text(_error, style: TextStyle(color: context.go.danger, fontSize: Go.fsBodySm)),
                           const SizedBox(height: Go.sp3),
-                          GestureDetector(onTap: _run, child: const Text('重试', style: TextStyle(color: Go.primary, fontWeight: FontWeight.w600))),
+                          GestureDetector(onTap: _run, child: Text('重试', style: TextStyle(color: context.go.primary, fontWeight: FontWeight.w600))),
                         ])
-                      : Text(_out, style: const TextStyle(fontSize: Go.fsBody, height: Go.lhRelaxed, color: Go.onSurface)),
+                      : Text(_out, style: TextStyle(fontSize: Go.fsBody, height: Go.lhRelaxed, color: context.go.onSurface)),
             ),
           ),
         ],
@@ -1781,8 +1868,8 @@ class _TranslateSheetState extends ConsumerState<_TranslateSheet> {
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp1),
-          decoration: BoxDecoration(color: Go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
-          child: Text(label, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface)),
+          decoration: BoxDecoration(color: context.go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text(label, style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface)),
         ),
       );
 }

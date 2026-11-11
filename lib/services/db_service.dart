@@ -18,8 +18,10 @@ Iterable<List<T>> chunked<T>(List<T> items, [int size = sqlBindChunk]) sync* {
 class DbService {
   static const _dbName = 'toneup_read.db';
 
-  DbService();
+  /// [dbPath] 仅用于测试/截图：缺省时使用应用数据库目录下的 `toneup_read.db`。
+  DbService({String? dbPath}) : _dbPath = dbPath;
 
+  final String? _dbPath;
   Database? _db;
   final Completer<Database> _initCompleter = Completer<Database>();
   bool _initStarted = false;
@@ -45,7 +47,7 @@ class DbService {
 
   Future<Database> _open() async {
     final dir = await getDatabasesPath();
-    final path = '$dir/$_dbName';
+    final path = _dbPath ?? '$dir/$_dbName';
     Future<void> runScript(Database db, String script) async {
       for (final stmt in script.split(';')) {
         final s = stmt.trim();
@@ -64,6 +66,7 @@ class DbService {
       onUpgrade: (db, oldVersion, newVersion) async {
         // 老库升级：先补 v6 的列/表（幂等），再用 IF NOT EXISTS 幂等补齐索引。
         if (oldVersion < 6) await _migrateV6(db);
+        if (oldVersion < 7) await _migrateV7(db);
         if (oldVersion < _dbVersion) await runScript(db, _indexes);
       },
     );
@@ -79,6 +82,12 @@ class DbService {
   Future<List<Map<String, dynamic>>> select(String sql, [List<Object?>? params]) async {
     final db = await database;
     return db.rawQuery(sql, params);
+  }
+
+  /// 事务执行器：离线词库首次导入等批量写入走这里，避免逐条提交。
+  Future<T> transaction<T>(Future<T> Function(Transaction txn) action) async {
+    final db = await database;
+    return db.transaction(action);
   }
 
   Future<int> insertReturnId(String sql, [List<Object?>? params]) async {
@@ -157,6 +166,24 @@ class DbService {
     }
   }
 
+  /// v6 → v7：`vocab_head` 补 `zh`（词汇页不再每次全量解析 word_cache）。
+  /// 幂等：列用存在性判断。
+  Future<void> _migrateV7(Database db) async {
+    try {
+      final info = await db.rawQuery('PRAGMA table_info(vocab_head)');
+      final have = info.map((r) => '${r['name']}').toSet();
+      if (!have.contains('zh')) {
+        try {
+          await db.execute('ALTER TABLE vocab_head ADD COLUMN zh TEXT');
+        } catch (_) {}
+      }
+    } catch (_) {
+      try {
+        await db.execute('ALTER TABLE vocab_head ADD COLUMN zh TEXT');
+      } catch (_) {}
+    }
+  }
+
   /// 清空「全部数据」= 文章/词典缓存 + 词汇三表。
   Future<void> clearAll() async {
     await _withWriteLock(() async {
@@ -222,7 +249,8 @@ CREATE TABLE IF NOT EXISTS vocab_head (
   fsrs_state INTEGER DEFAULT 0,
   fsrs_due INTEGER,
   fsrs_s REAL DEFAULT 0,
-  fsrs_d REAL DEFAULT 0
+  fsrs_d REAL DEFAULT 0,
+  zh TEXT
 );
 CREATE TABLE IF NOT EXISTS vocab_occ (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -264,4 +292,4 @@ const List<String> dbIndexStatements = [
 final String _indexes = '${dbIndexStatements.join(';\n')};';
 
 /// 当前数据库版本；每次改 [schema]/[_indexes] 后 +1 并在 [onUpgrade] 里补迁移。
-const int _dbVersion = 6;
+const int _dbVersion = 7;

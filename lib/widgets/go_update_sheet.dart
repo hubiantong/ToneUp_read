@@ -9,7 +9,7 @@ Future<void> showGoUpdateSheet(BuildContext context, UpdateController c) => show
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      barrierColor: Go.scrim,
+      barrierColor: context.go.scrim,
       builder: (_) => _UpdateSheet(controller: c),
     );
 
@@ -21,16 +21,17 @@ class _UpdateSheet extends StatelessWidget {
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
+          final go = context.go;
           final info = controller.info;
           return SafeArea(
             top: false,
             child: Container(
               padding: const EdgeInsets.fromLTRB(Go.sp6, Go.sp4, Go.sp6, Go.sp6),
-              decoration: const BoxDecoration(
-                color: Go.glassBgStrong,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(Go.rXl)),
-                border: Border(top: BorderSide(color: Go.glassBorder)),
-                boxShadow: Go.glassShadow,
+              decoration: BoxDecoration(
+                color: go.glassBgStrong,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(Go.rXl)),
+                border: Border(top: BorderSide(color: go.glassBorder)),
+                boxShadow: go.glassShadow,
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -40,24 +41,24 @@ class _UpdateSheet extends StatelessWidget {
                     child: Container(
                       width: Go.sp10,
                       height: 3,
-                      decoration: BoxDecoration(color: Go.outlineStrong, borderRadius: BorderRadius.circular(Go.rFull)),
+                      decoration: BoxDecoration(color: go.outlineStrong, borderRadius: BorderRadius.circular(Go.rFull)),
                     ),
                   ),
                   const SizedBox(height: Go.sp5),
                   Row(
                     children: [
-                      const GoIcon('bell', size: 18, color: Go.primary),
+                      GoIcon('bell', size: 18, color: go.primary),
                       const SizedBox(width: Go.sp3),
                       Text(
                         controller.phase == UpdatePhase.ready ? '新版本已就绪' : '发现新版本',
-                        style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w700, color: Go.onSurface),
+                        style: TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w700, color: go.onSurface),
                       ),
                       const Spacer(),
                       if (info != null)
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: 2),
-                          decoration: BoxDecoration(color: Go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
-                          child: Text('v${info.version}', style: const TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: Go.primary)),
+                          decoration: BoxDecoration(color: go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
+                          child: Text('v${info.version}', style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: go.primary)),
                         ),
                       const SizedBox(width: Go.sp3),
                       GoIconBtn(icon: 'close', size: Go.r(56), onTap: () => Navigator.pop(context)),
@@ -70,7 +71,7 @@ class _UpdateSheet extends StatelessWidget {
                       UpdatePhase.checking => const _Status(key: ValueKey('checking'), icon: 'refresh', text: '正在检查…', spin: true),
                       UpdatePhase.latest => const _Status(key: ValueKey('latest'), icon: 'check', text: '已经是最新版本了'),
                       UpdatePhase.installing => const _Status(key: ValueKey('installing'), icon: 'check', text: '已交给系统安装器，按提示完成安装'),
-                      UpdatePhase.downloading || UpdatePhase.verifying => _progressBlock(),
+                      UpdatePhase.downloading || UpdatePhase.verifying => _progressBlock(context),
                       UpdatePhase.ready => _readyBlock(context),
                       UpdatePhase.failed => _failedBlock(context),
                       _ => _availableBlock(context),
@@ -84,6 +85,7 @@ class _UpdateSheet extends StatelessWidget {
       );
 
   Widget _availableBlock(BuildContext context) {
+    final go = context.go;
     final info = controller.info;
     return Column(
       key: const ValueKey('available'),
@@ -91,15 +93,15 @@ class _UpdateSheet extends StatelessWidget {
       children: [
         Row(
           children: [
-            Text(controller.installedLabel, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3)),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: Go.sp3),
-              child: Icon(Icons.arrow_forward, size: 14, color: Go.onSurface3),
+            Text(controller.installedLabel, style: TextStyle(fontSize: Go.fsBodySm, color: go.onSurface3)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Go.sp3),
+              child: Icon(Icons.arrow_forward, size: 14, color: go.onSurface3),
             ),
-            Text('v${info?.version ?? ''}', style: const TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w700, color: Go.primary)),
+            Text('v${info?.version ?? ''}', style: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w700, color: go.primary)),
             const Spacer(),
             if ((info?.size ?? 0) > 0)
-              Text('${((info!.size) / 1024 / 1024).toStringAsFixed(1)} MB', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+              Text('${((info!.size) / 1024 / 1024).toStringAsFixed(1)} MB', style: TextStyle(fontSize: Go.fsMeta, color: go.onSurface3)),
           ],
         ),
         if ((info?.notes.trim().isNotEmpty ?? false)) ...[
@@ -110,13 +112,13 @@ class _UpdateSheet extends StatelessWidget {
             child: SingleChildScrollView(
               child: Text(
                 info!.notes,
-                style: const TextStyle(fontSize: Go.fsBodySm, height: Go.lhSnug, color: Go.onSurface2),
+                style: TextStyle(fontSize: Go.fsBodySm, height: Go.lhSnug, color: go.onSurface2),
               ),
             ),
           ),
         ],
         const SizedBox(height: Go.sp6),
-        GoBtn(label: '立即更新', icon: const GoIcon('export', size: 16, color: Go.onPrimary), block: true, onTap: controller.downloadAndInstall),
+        GoBtn(label: '立即更新', icon: GoIcon('export', size: 16, color: go.onPrimary), block: true, onTap: controller.downloadAndInstall),
         const SizedBox(height: Go.sp3),
         Row(
           children: [
@@ -130,38 +132,42 @@ class _UpdateSheet extends StatelessWidget {
   }
 
   /// 就绪态：包已下载并校验完成，确认后拉起系统安装器（Android 无法绕过安装确认）。
-  Widget _readyBlock(BuildContext context) => Column(
-        key: const ValueKey('ready'),
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const GoIcon('check', size: 15, color: Go.primary),
-              const SizedBox(width: Go.sp3),
-              Expanded(
-                child: Text(
-                  '安装包已下载完成，确认后拉起系统安装',
-                  style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface2, height: Go.lhSnug),
-                ),
+  Widget _readyBlock(BuildContext context) {
+    final go = context.go;
+    return Column(
+      key: const ValueKey('ready'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            GoIcon('check', size: 15, color: go.primary),
+            const SizedBox(width: Go.sp3),
+            Expanded(
+              child: Text(
+                '安装包已下载完成，确认后拉起系统安装',
+                style: TextStyle(fontSize: Go.fsBodySm, color: go.onSurface2, height: Go.lhSnug),
               ),
-            ],
-          ),
-          const SizedBox(height: Go.sp6),
-          GoBtn(
-            label: '立即安装',
-            icon: const GoIcon('export', size: 16, color: Go.onPrimary),
-            block: true,
-            onTap: () {
-              Navigator.pop(context);
-              controller.installReady();
-            },
-          ),
-          const SizedBox(height: Go.sp3),
-          GoBtn(label: '稍后', kind: GoBtnKind.tonal, block: true, onTap: () => Navigator.pop(context)),
-        ],
-      );
+            ),
+          ],
+        ),
+        const SizedBox(height: Go.sp6),
+        GoBtn(
+          label: '立即安装',
+          icon: GoIcon('export', size: 16, color: go.onPrimary),
+          block: true,
+          onTap: () {
+            Navigator.pop(context);
+            controller.installReady();
+          },
+        ),
+        const SizedBox(height: Go.sp3),
+        GoBtn(label: '稍后', kind: GoBtnKind.tonal, block: true, onTap: () => Navigator.pop(context)),
+      ],
+    );
+  }
 
-  Widget _progressBlock() {
+  Widget _progressBlock(BuildContext context) {
+    final go = context.go;
     final verifying = controller.phase == UpdatePhase.verifying;
     return Column(
       key: const ValueKey('progress'),
@@ -176,8 +182,8 @@ class _UpdateSheet extends StatelessWidget {
             child: LinearProgressIndicator(
               value: v,
               minHeight: 8,
-              backgroundColor: Go.surfaceVariant,
-              valueColor: const AlwaysStoppedAnimation(Go.primary),
+              backgroundColor: go.surfaceVariant,
+              valueColor: AlwaysStoppedAnimation(go.primary),
             ),
           ),
         ),
@@ -186,13 +192,13 @@ class _UpdateSheet extends StatelessWidget {
           children: [
             Text(
               verifying ? '正在校验安装包…' : '${(controller.progress * 100).toStringAsFixed(0)}%',
-              style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface2),
+              style: TextStyle(fontSize: Go.fsMeta, color: go.onSurface2),
             ),
             const Spacer(),
             if (!verifying)
               Text(
                 '${(controller.received / 1024 / 1024).toStringAsFixed(1)} / ${(controller.total / 1024 / 1024).toStringAsFixed(1)} MB',
-                style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3),
+                style: TextStyle(fontSize: Go.fsMeta, color: go.onSurface3),
               ),
           ],
         ),
@@ -200,26 +206,29 @@ class _UpdateSheet extends StatelessWidget {
     );
   }
 
-  Widget _failedBlock(BuildContext context) => Column(
-        key: const ValueKey('failed'),
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const GoIcon('warning', size: 15, color: Go.error),
-              const SizedBox(width: Go.sp3),
-              Expanded(
-                child: Text(controller.error ?? '更新失败', style: const TextStyle(fontSize: Go.fsBodySm, color: Go.error, height: Go.lhSnug)),
-              ),
-            ],
-          ),
-          const SizedBox(height: Go.sp5),
-          GoBtn(label: '重试', block: true, onTap: controller.downloadAndInstall),
-          const SizedBox(height: Go.sp3),
-          GoBtn(label: '稍后再说', kind: GoBtnKind.text, block: true, onTap: () { controller.dismiss(); Navigator.pop(context); }),
-        ],
-      );
+  Widget _failedBlock(BuildContext context) {
+    final go = context.go;
+    return Column(
+      key: const ValueKey('failed'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            GoIcon('warning', size: 15, color: go.error),
+            const SizedBox(width: Go.sp3),
+            Expanded(
+              child: Text(controller.error ?? '更新失败', style: TextStyle(fontSize: Go.fsBodySm, color: go.error, height: Go.lhSnug)),
+            ),
+          ],
+        ),
+        const SizedBox(height: Go.sp5),
+        GoBtn(label: '重试', block: true, onTap: controller.downloadAndInstall),
+        const SizedBox(height: Go.sp3),
+        GoBtn(label: '稍后再说', kind: GoBtnKind.text, block: true, onTap: () { controller.dismiss(); Navigator.pop(context); }),
+      ],
+    );
+  }
 }
 
 class _Status extends StatelessWidget {
@@ -229,15 +238,18 @@ class _Status extends StatelessWidget {
   const _Status({super.key, required this.icon, required this.text, this.spin = false});
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: Go.sp6),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            GoIcon(icon, size: 16, color: Go.primary, spin: spin),
-            const SizedBox(width: Go.sp3),
-            Text(text, style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface2)),
-          ],
-        ),
-      );
+  Widget build(BuildContext context) {
+    final go = context.go;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Go.sp6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          GoIcon(icon, size: 16, color: go.primary, spin: spin),
+          const SizedBox(width: Go.sp3),
+          Text(text, style: TextStyle(fontSize: Go.fsBodySm, color: go.onSurface2)),
+        ],
+      ),
+    );
+  }
 }

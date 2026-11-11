@@ -31,9 +31,12 @@ class VocabService {
   // ================= 词汇中心（对齐 vocab.js） =================
 
   static const _legacySpreadDays = 30;
+  bool _legacySynced = false;
 
   /// 把历史 word_cache 词同步进 vocab_head（幂等），旧生词按查词时间分 30 天错峰到期。
+  /// 进程内只跑一次：阅读中每点一个词都会触发词汇页刷新，重复全量扫描没有必要。
   Future<void> syncHeadsFromCache() async {
+    if (_legacySynced) return;
     final allHeads = await _db.select('SELECT head FROM vocab_head');
     for (final h in allHeads) {
       final hd = '${h['head']}';
@@ -42,34 +45,91 @@ class VocabService {
         await _db.execute('DELETE FROM vocab_head WHERE head = ?', [hd]);
       }
     }
-    final rows = await _db.select("SELECT word, lemma, at FROM word_cache WHERE word IS NOT NULL AND mode IN ('en2zh','en2en')");
-    final clean = rows.where((r) {
-      final w = '${r['word']}';
-      return w.length <= 80 && (w.length - w.replaceAll(' ', '').length) <= 5;
-    }).toList();
-    if (clean.isEmpty) return;
-    final existing = await _db.select('SELECT head FROM vocab_head');
-    final have = existing.map((e) => '${e['head']}').toSet();
+    final existing = await _db.select('SELECT head, zh FROM vocab_head');
+    final have = <String, String>{};
+    for (final e in existing) {
+      have['${e['head']}'] = '${e['zh'] ?? ''}';
+    }
     final now = DateTime.now().millisecondsSinceEpoch;
-    for (final r in clean) {
-      final head = ((r['lemma'] as String?)?.isNotEmpty == true ? r['lemma'] as String : '${r['word']}'.toLowerCase());
-      if (head.isEmpty || have.contains(head)) continue;
-      have.add(head);
-      final at = (r['at'] as int?) ?? now;
-      final days = ((at ~/ 86400000).abs()) % _legacySpreadDays;
-      final due = now + days * 86400000;
-      await _db.execute(
-          'INSERT OR IGNORE INTO vocab_head (head, kind, firstSeen, lastSeen, occCount, fsrs_state, fsrs_due, fsrs_s, fsrs_d) VALUES (?,?,?,?,?,?,?,?,?)',
-          [head, 'word', at, at, 1, 0, due, 1.0, 5.0]);
+    // rowid keyset 分页：无 ORDER BY 的 OFFSET 分页在并发写入时可能跳/重，
+    // 这里按 rowid 递增读取，单次最多 100 行，避免 CursorWindow 超限。
+    var lastRowId = 0;
+    while (true) {
+      final rows = await _db.select(
+        "SELECT rowid AS rid, word, lemma, at, result FROM word_cache "
+        "WHERE rowid > ? AND word IS NOT NULL AND mode IN ('en2zh','en2en') "
+        "ORDER BY rowid LIMIT $_chunk",
+        [lastRowId],
+      );
+      if (rows.isEmpty) break;
+      for (final r in rows) {
+        final w = '${r['word']}';
+        if (w.length > 80 || (w.length - w.replaceAll(' ', '').length) > 5) continue;
+        final head = ((r['lemma'] as String?)?.isNotEmpty == true ? r['lemma'] as String : w.toLowerCase());
+        if (head.isEmpty) continue;
+        final zh = _zhFromResult(r['result']);
+        final shortZh = zh.isEmpty ? null : _shortZh(zh);
+        if (have.containsKey(head)) {
+          // 老库升级后 vocab_head.zh 为空：用已有 word_cache 回填一次。
+          if ((have[head] ?? '').trim().isEmpty && shortZh != null) {
+            await _db.execute('UPDATE vocab_head SET zh = ? WHERE head = ?', [shortZh, head]);
+            have[head] = shortZh;
+          }
+          continue;
+        }
+        final at = (r['at'] as int?) ?? now;
+        final days = ((at ~/ 86400000).abs()) % _legacySpreadDays;
+        final due = now + days * 86400000;
+        await _db.execute(
+            'INSERT OR IGNORE INTO vocab_head (head, kind, firstSeen, lastSeen, occCount, fsrs_state, fsrs_due, fsrs_s, fsrs_d, zh) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            [head, 'word', at, at, 1, 0, due, 1.0, 5.0, shortZh]);
+        have[head] = shortZh ?? '';
+      }
+      final lastRid = rows.last['rid'];
+      if (lastRid is! num) break;
+      lastRowId = lastRid.toInt();
+      if (rows.length < _chunk) break;
+    }
+    _legacySynced = true;
+  }
+
+  /// 从 `word_cache.result` 的冻结 JSON 里取一条中文释义（dict 卡片取首义项，text 直接取文）。
+  static String _zhFromResult(Object? raw) {
+    if (raw == null) return '';
+    try {
+      final r = jsonDecode('$raw');
+      if (r is! Map) return '';
+      if (r['kind'] == 'dict') {
+        final senses = r['senses'];
+        if (senses is List && senses.isNotEmpty && senses.first is Map) {
+          final d = '${(senses.first as Map)['definition'] ?? ''}'.trim();
+          if (d.isNotEmpty) return d;
+        }
+        return '${r['zh'] ?? ''}'.trim();
+      }
+      return '${r['text'] ?? ''}'.trim();
+    } catch (_) {
+      return '';
     }
   }
+
+  /// 查词成功后回写词条中文释义，词汇页不再每次全量解析 word_cache。
+  Future<void> updateHeadZh(String head, String zh) async {
+    final h = lemmaOf(head);
+    final z = zh.trim();
+    if (h.isEmpty || z.isEmpty) return;
+    await _db.execute('UPDATE vocab_head SET zh = ? WHERE head = ?', [_shortZh(z), h]);
+  }
+
+  static String _shortZh(String zh) => zh.length > 120 ? zh.substring(0, 120) : zh;
 
   /// 批量读取 word_cache / 其它大字段时的单批上限（规避 Android CursorWindow）。
   static const _chunk = 100;
 
   /// 词汇列表（附带 sourceCount / latestSentence / zh）。
   Future<List<Map<String, dynamic>>> getHeads() async {
-    final list = (await _db.select('SELECT head, kind, firstSeen, lastSeen, occCount, family, fsrs_state, fsrs_due FROM vocab_head ORDER BY lastSeen DESC'))
+    final list = (await _db.select(
+            'SELECT head, kind, firstSeen, lastSeen, occCount, family, fsrs_state, fsrs_due, zh FROM vocab_head ORDER BY lastSeen DESC'))
         .map((e) => Map<String, dynamic>.of(e))
         .toList();
     // vocab_occ 会随阅读持续增长，整表拉取会逼近 CursorWindow；这里只要两个聚合量，
@@ -84,39 +144,10 @@ class VocabService {
       sourceCount[k] = (r['c'] as int?) ?? 0;
       latestSentence[k] = (r['sentence'] as String?) ?? '';
     }
-    // result 是整段 JSON，一次全表取会逼近 Android CursorWindow 上限，按 100 条分批。
-    final heads = list.map((h) => '${h['head']}').toList();
-    final wcMap = <String, Map<String, dynamic>>{};
-    for (var i = 0; i < heads.length; i += _chunk) {
-      final chunk = heads.skip(i).take(_chunk).toList();
-      final ph = chunk.map((_) => '?').join(',');
-      final rows = await _db.select(
-        'SELECT word, lemma, result FROM word_cache WHERE word IN ($ph) OR lemma IN ($ph)',
-        [...chunk, ...chunk],
-      );
-      for (final w in rows) {
-        final k = (w['lemma'] as String?)?.isNotEmpty == true ? w['lemma'] as String : '${w['word']}';
-        wcMap[k] ??= w;
-      }
-    }
     for (final h in list) {
       final head = '${h['head']}';
       h['sourceCount'] = sourceCount[head] ?? 0;
       h['latestSentence'] = latestSentence[head] ?? '';
-      final hit = wcMap[head];
-      if (hit != null && hit['result'] != null) {
-        try {
-          final r = jsonDecode(hit['result'] as String);
-          if (r is Map) {
-            if (r['kind'] == 'dict') {
-              final senses = r['senses'] as List?;
-              h['zh'] = (senses != null && senses.isNotEmpty && senses.first is Map) ? (senses.first['definition'] ?? '') : '';
-            } else if (r['text'] != null) {
-              h['zh'] = r['text'];
-            }
-          }
-        } catch (_) {}
-      }
     }
     return list;
   }

@@ -20,6 +20,7 @@ class VocabScreen extends ConsumerStatefulWidget {
 
 class _VocabScreenState extends ConsumerState<VocabScreen> {
   List<Map<String, dynamic>> _heads = [];
+  List<Map<String, dynamic>> _filteredCache = [];
   String _mode = 'all';
   int _dueCount = 0;
   Map<String, dynamic>? _occ;
@@ -48,7 +49,11 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
     });
   }
 
-  List<Map<String, dynamic>> get _filtered => _mode == 'all' ? _heads : _heads.where((h) => h['kind'] == _mode).toList();
+  void _applyModeFilter() {
+    _filteredCache = _mode == 'all' ? _heads : _heads.where((h) => h['kind'] == _mode).toList();
+  }
+
+  List<Map<String, dynamic>> get _filtered => _filteredCache;
 
   Future<void> _load() async {
     try {
@@ -56,6 +61,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
       await svc.syncHeadsFromCache();
       _heads = await svc.getHeads();
       _dueCount = await svc.dueCount();
+      _applyModeFilter();
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('词汇加载失败: $e')));
@@ -110,6 +116,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
     await ref.read(vocabProvider).removeHead(h['head'] as String);
     setState(() {
       _heads = _heads.where((x) => x['head'] != h['head']).toList();
+      _applyModeFilter();
     });
     _dueCount = await ref.read(vocabProvider).dueCount();
     if (mounted) setState(() {});
@@ -128,6 +135,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
     await ref.read(vocabProvider).clearVocab();
     setState(() {
       _heads = [];
+      _filteredCache = [];
       _dueCount = 0;
     });
   }
@@ -166,7 +174,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
           ),
           if (_occ != null) _occSheet(),
           if (_org != null) _orgSheet(),
-          if (_busy) Container(color: Go.scrim.withValues(alpha: 0.3), alignment: Alignment.center, child: const PolySpinner()),
+          if (_busy) Container(color: context.go.scrim.withValues(alpha: 0.3), alignment: Alignment.center, child: const PolySpinner()),
         ],
       ),
     );
@@ -181,18 +189,18 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
               onTap: _onOrganize,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: Go.sp1),
-                decoration: BoxDecoration(border: Border.all(color: Go.primary), borderRadius: BorderRadius.circular(Go.rFull)),
+                decoration: BoxDecoration(border: Border.all(color: context.go.primary), borderRadius: BorderRadius.circular(Go.rFull)),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  GoIcon('robot', size: Go.r(40), color: Go.primary),
+                  GoIcon('robot', size: Go.r(40), color: context.go.primary),
                   const SizedBox(width: Go.sp1),
-                  const Text('AI 整理', style: TextStyle(fontSize: Go.fsMeta, color: Go.primary)),
+                  Text('AI 整理', style: TextStyle(fontSize: Go.fsMeta, color: context.go.primary)),
                 ]),
               ),
             ),
           if (_heads.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(left: Go.sp3),
-              child: GestureDetector(onTap: _clearAll, child: const Text('清空', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))),
+              child: GestureDetector(onTap: _clearAll, child: Text('清空', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3))),
             ),
           Padding(
             padding: const EdgeInsets.only(left: Go.sp2),
@@ -239,16 +247,16 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
       context: context,
       backgroundColor: Colors.transparent,
       builder: (c) => Container(
-        decoration: const BoxDecoration(color: Go.surfaceRaised, borderRadius: BorderRadius.vertical(top: Radius.circular(Go.rXl))),
+        decoration: BoxDecoration(color: c.go.surfaceRaised, borderRadius: const BorderRadius.vertical(top: Radius.circular(Go.rXl))),
         padding: EdgeInsets.only(left: Go.sp5, right: Go.sp5, top: Go.sp4, bottom: MediaQuery.of(c).padding.bottom + Go.sp6),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: Go.r(64), height: 3, decoration: BoxDecoration(color: Go.outlineStrong, borderRadius: BorderRadius.circular(Go.rFull))),
+            Container(width: Go.r(64), height: 3, decoration: BoxDecoration(color: c.go.outlineStrong, borderRadius: BorderRadius.circular(Go.rFull))),
             const SizedBox(height: Go.sp4),
-            const Text('导出生词', style: TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w600, color: Go.onSurface)),
+            Text('导出生词', style: TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w600, color: c.go.onSurface)),
             const SizedBox(height: Go.sp2),
-            Text('${_heads.length} 个词，英文词条以半角逗号分隔', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+            Text('${_heads.length} 个词，英文词条以半角逗号分隔', style: TextStyle(fontSize: Go.fsMeta, color: c.go.onSurface3)),
             const SizedBox(height: Go.sp5),
             _exportBtn(label: '复制文本', icon: 'copy', filled: true, onTap: () {
               Navigator.pop(c);
@@ -272,17 +280,17 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
           padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp4),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: filled ? Go.primary : Colors.transparent,
+            color: filled ? context.go.primary : Colors.transparent,
             borderRadius: BorderRadius.circular(Go.rFull),
-            border: filled ? null : Border.all(color: Go.primary, width: 1),
+            border: filled ? null : Border.all(color: context.go.primary, width: 1),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              GoIcon(icon, size: Go.r(40), color: filled ? Colors.white : Go.primary),
+              GoIcon(icon, size: Go.r(40), color: filled ? context.go.onPrimary : context.go.primary),
               const SizedBox(width: Go.sp2),
-              Text(label, style: TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: filled ? Colors.white : Go.primary)),
+              Text(label, style: TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: filled ? context.go.onPrimary : context.go.primary)),
             ],
           ),
         ),
@@ -298,7 +306,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(Go.sp6, 0, Go.sp6, Go.sp2),
-            child: Text('${_heads.length} 个词族', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+            child: Text('${_heads.length} 个词族', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
           ),
         ),
         SliverToBoxAdapter(child: _modeTabs()),
@@ -324,13 +332,13 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp4),
           padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp5),
-          decoration: BoxDecoration(color: Go.primary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.elev1),
+          decoration: BoxDecoration(color: context.go.primary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(Go.rLg), boxShadow: context.go.elev1),
           child: Row(
             children: [
-              Text('$_dueCount', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Go.primary)),
-              const Padding(padding: EdgeInsets.only(left: Go.sp2), child: Text('张待复习', style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface))),
+              Text('$_dueCount', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: context.go.primary)),
+              Padding(padding: const EdgeInsets.only(left: Go.sp2), child: Text('张待复习', style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface))),
               const Spacer(),
-              const Text('去复习 ›', style: TextStyle(fontSize: Go.fsBodySm, color: Go.primary, fontWeight: FontWeight.w600)),
+              Text('去复习 ›', style: TextStyle(fontSize: Go.fsBodySm, color: context.go.primary, fontWeight: FontWeight.w600)),
             ],
           ),
         ),
@@ -342,11 +350,14 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
           children: [
             for (final m in [('all', '全部'), ('word', '单词'), ('phrase', '短语')]) ...[
               GestureDetector(
-                onTap: () => setState(() => _mode = m.$1),
+                onTap: () => setState(() {
+                  _mode = m.$1;
+                  _applyModeFilter();
+                }),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp1),
-                  decoration: BoxDecoration(color: _mode == m.$1 ? Go.primary95 : Colors.transparent, borderRadius: BorderRadius.circular(Go.rFull), border: Border.all(color: _mode == m.$1 ? Go.primary : Go.outline, width: 0.5)),
-                  child: Text(m.$2, style: TextStyle(fontSize: Go.fsMeta, color: _mode == m.$1 ? Go.primary : Go.onSurface3)),
+                  decoration: BoxDecoration(color: _mode == m.$1 ? context.go.primary95 : Colors.transparent, borderRadius: BorderRadius.circular(Go.rFull), border: Border.all(color: _mode == m.$1 ? context.go.primary : context.go.outline, width: 0.5)),
+                  child: Text(m.$2, style: TextStyle(fontSize: Go.fsMeta, color: _mode == m.$1 ? context.go.primary : context.go.onSurface3)),
                 ),
               ),
               const SizedBox(width: Go.sp2),
@@ -361,7 +372,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
       child: Container(
         margin: const EdgeInsets.only(bottom: Go.sp3),
         padding: const EdgeInsets.symmetric(horizontal: Go.sp5, vertical: Go.sp4),
-        decoration: BoxDecoration(color: Go.surface, borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.elev1),
+        decoration: BoxDecoration(color: context.go.surface, borderRadius: BorderRadius.circular(Go.rLg), boxShadow: context.go.elev1),
         child: Row(
           children: [
             Expanded(
@@ -370,24 +381,24 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
                 children: [
                   Row(
                     children: [
-                      Text('${h['head']}', style: const TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: Go.onSurface)),
+                      Text('${h['head']}', style: TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: context.go.onSurface)),
                       const SizedBox(width: Go.sp3),
                       if ((h['occCount'] as int? ?? 0) > 1) _badge('×${h['occCount']}'),
                       if ((h['sourceCount'] as int? ?? 0) > 1) ...[const SizedBox(width: Go.sp2), _badge('${h['sourceCount']} 来源', src: true)],
                     ],
                   ),
-                  if (h['zh'] != null && '${h['zh']}'.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 2), child: Text('${h['zh']}', style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface))),
+                  if (h['zh'] != null && '${h['zh']}'.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 2), child: Text('${h['zh']}', style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface))),
                   if ('${h['latestSentence'] ?? ''}'.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 1),
-                      child: Text('${h['latestSentence']}'.length > 70 ? '${h['latestSentence']}'.substring(0, 70) : '${h['latestSentence']}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+                      child: Text('${h['latestSentence']}'.length > 70 ? '${h['latestSentence']}'.substring(0, 70) : '${h['latestSentence']}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
                     ),
                 ],
               ),
             ),
             GestureDetector(
               onTap: () => _remove(h),
-              child: const Padding(padding: EdgeInsets.all(Go.sp2), child: Text('删除', style: TextStyle(fontSize: Go.fsMeta, color: Go.danger))),
+              child: Padding(padding: const EdgeInsets.all(Go.sp2), child: Text('删除', style: TextStyle(fontSize: Go.fsMeta, color: context.go.danger))),
             ),
           ],
         ),
@@ -397,8 +408,8 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
 
   Widget _badge(String text, {bool src = false}) => Container(
         padding: const EdgeInsets.symmetric(horizontal: Go.sp2, vertical: 1),
-        decoration: BoxDecoration(color: src ? Go.primary95 : Go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
-        child: Text(text, style: TextStyle(fontSize: Go.fsMeta, color: src ? Go.primary : Go.onSurface3)),
+        decoration: BoxDecoration(color: src ? context.go.primary95 : context.go.surface2, borderRadius: BorderRadius.circular(Go.rFull)),
+        child: Text(text, style: TextStyle(fontSize: Go.fsMeta, color: src ? context.go.primary : context.go.onSurface3)),
       );
 
   Widget _sheetShell({required String title, String? zh, required Widget body, required Widget actions, bool tall = false}) {
@@ -408,21 +419,21 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
         _org = null;
       }),
       child: Container(
-        color: Colors.black.withValues(alpha: 0.4),
+        color: context.go.scrim,
         alignment: Alignment.bottomCenter,
         child: GestureDetector(
           onTap: () {},
           child: Container(
             width: double.infinity,
             constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * (tall ? 0.84 : 0.78)),
-            decoration: const BoxDecoration(color: Go.surface, borderRadius: BorderRadius.vertical(top: Radius.circular(Go.rXl))),
+            decoration: BoxDecoration(color: context.go.surface, borderRadius: const BorderRadius.vertical(top: Radius.circular(Go.rXl))),
             padding: const EdgeInsets.all(Go.sp6),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: const TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w700, color: Go.onSurface)),
-                if (zh != null && zh.isNotEmpty) Text(zh, style: const TextStyle(fontSize: Go.fsBody, color: Go.onSurface3)),
+                Text(title, style: TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w700, color: context.go.onSurface)),
+                if (zh != null && zh.isNotEmpty) Text(zh, style: TextStyle(fontSize: Go.fsBody, color: context.go.onSurface3)),
                 Flexible(child: SingleChildScrollView(padding: const EdgeInsets.symmetric(vertical: Go.sp4), child: body)),
                 actions,
               ],
@@ -445,8 +456,8 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
           width: double.infinity,
           padding: const EdgeInsets.all(Go.sp3),
           alignment: Alignment.center,
-          decoration: BoxDecoration(color: Go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
-          child: const Text('关闭', style: TextStyle(fontSize: Go.fsBody, color: Colors.white)),
+          decoration: BoxDecoration(color: context.go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text('关闭', style: TextStyle(fontSize: Go.fsBody, color: context.go.onPrimary)),
         ),
       ),
       body: Column(
@@ -457,18 +468,18 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
               onTap: () => _goArticle(o),
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: Go.sp4),
-                decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Go.outline, width: 0.5))),
+                decoration: BoxDecoration(border: Border(bottom: BorderSide(color: context.go.outline, width: 0.5))),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('${o['sourceLabel'] ?? '来源'} · ${o['articleTitle'] ?? ''}', style: const TextStyle(fontSize: Go.fsMeta, color: Go.primary, fontWeight: FontWeight.w600)),
-                    Padding(padding: const EdgeInsets.only(top: 2), child: Text('“${o['sentence']}”', style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface, height: 1.5))),
-                    const Padding(padding: EdgeInsets.only(top: 2), child: Text('回到原文 ›', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))),
+                    Text('${o['sourceLabel'] ?? '来源'} · ${o['articleTitle'] ?? ''}', style: TextStyle(fontSize: Go.fsMeta, color: context.go.primary, fontWeight: FontWeight.w600)),
+                    Padding(padding: const EdgeInsets.only(top: 2), child: Text('“${o['sentence']}”', style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface, height: 1.5))),
+                    Padding(padding: const EdgeInsets.only(top: 2), child: Text('回到原文 ›', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3))),
                   ],
                 ),
               ),
             ),
-          if (list.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: Go.sp4), child: Text('暂无原文出处', style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface3))),
+          if (list.isEmpty) Padding(padding: const EdgeInsets.symmetric(vertical: Go.sp4), child: Text('暂无原文出处', style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface3))),
         ],
       ),
     );
@@ -485,8 +496,8 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
           width: double.infinity,
           padding: const EdgeInsets.all(Go.sp3),
           alignment: Alignment.center,
-          decoration: BoxDecoration(color: Go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
-          child: const Text('完成', style: TextStyle(fontSize: Go.fsBody, color: Colors.white)),
+          decoration: BoxDecoration(color: context.go.primary, borderRadius: BorderRadius.circular(Go.rFull)),
+          child: Text('完成', style: TextStyle(fontSize: Go.fsBody, color: context.go.onPrimary)),
         ),
       ),
       body: Column(
@@ -500,8 +511,8 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
                 children: [
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: 1),
-                    decoration: BoxDecoration(color: Go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
-                    child: Text('${g['theme']}', style: const TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: Go.primary)),
+                    decoration: BoxDecoration(color: context.go.primary95, borderRadius: BorderRadius.circular(Go.rFull)),
+                    child: Text('${g['theme']}', style: TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: context.go.primary)),
                   ),
                   const SizedBox(height: Go.sp2),
                   for (final it in (g['items'] as List? ?? [])) _orgItem(it),
@@ -515,15 +526,15 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
 
   Widget _orgItem(dynamic it) => Container(
         padding: const EdgeInsets.symmetric(vertical: Go.sp3),
-        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Go.outline, width: 0.5))),
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: context.go.outline, width: 0.5))),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('${it['word']}  ${it['pos'] ?? ''}', style: const TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: Go.onSurface)),
-            Text('${it['zh'] ?? ''}', style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface)),
-            Text('${it['en'] ?? ''}', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
-            Text('词族：${(it['family'] as List? ?? []).join(', ')}', style: const TextStyle(fontSize: Go.fsMeta, color: Go.primary)),
-            Text('e.g. ${it['example'] ?? ''}', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, fontStyle: FontStyle.italic)),
+            Text('${it['word']}  ${it['pos'] ?? ''}', style: TextStyle(fontSize: Go.fsBody, fontWeight: FontWeight.w600, color: context.go.onSurface)),
+            Text('${it['zh'] ?? ''}', style: TextStyle(fontSize: Go.fsBodySm, color: context.go.onSurface)),
+            Text('${it['en'] ?? ''}', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3)),
+            Text('词族：${(it['family'] as List? ?? []).join(', ')}', style: TextStyle(fontSize: Go.fsMeta, color: context.go.primary)),
+            Text('e.g. ${it['example'] ?? ''}', style: TextStyle(fontSize: Go.fsMeta, color: context.go.onSurface3, fontStyle: FontStyle.italic)),
           ],
         ),
       );
